@@ -4,17 +4,27 @@ ORCA — data/scheduler.py
 Simulates real-time inventory depletion and triggers the agent pipeline.
 
 What it does:
-    Every 60 seconds  -> deducts random sales from inventory (simulates a day passing)
-    Every 5 minutes   -> runs stockout risk detection, updates stock_status
+    Every 60 seconds  -> deducts random sales from inventory
+    Every 5 minutes   -> recalculates risk metrics and stock_status
     On status change  -> writes alert to alerts table
+
+FIX vs previous version:
+    stock_status formula corrected to match RCC bootcamp doc:
+        Critical  = days_of_cover < 50% of effective_lead_time
+        At Risk   = days_of_cover >= 50% AND < 100% of effective_lead_time
+        Healthy   = days_of_cover >= 100% of effective_lead_time
+        Overstock = current_stock > reorder_point x 3
+
+    Previous wrong formula used fixed thresholds (< 3 days, < lead/10+5)
+    which did not match the RCC design at all.
 
 CLI:
     python data/scheduler.py              # default 60s interval
     python data/scheduler.py --interval 10  # faster for testing
-    python data/scheduler.py --once       # run one cycle and exit (for testing)
+    python data/scheduler.py --once       # run one cycle and exit
 
 Logging:
-    Logs to both console and logs/scheduler.log
+    Console + logs/scheduler.log
 """
 
 import sys
@@ -31,34 +41,28 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 DB_PATH = Path(__file__).parent.parent / "db" / "orca.db"
 LOG_DIR = Path(__file__).parent.parent / "logs"
-
 LOG_DIR.mkdir(exist_ok=True)
 
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 
 
 # ==============================================================================
-# LOGGING SETUP
+# LOGGING
 # ==============================================================================
 
 def setup_logging() -> logging.Logger:
     logger = logging.getLogger("orca.scheduler")
     logger.setLevel(logging.INFO)
 
-    # console handler
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
     ch.setFormatter(logging.Formatter(
-        "%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S"
+        "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%H:%M:%S"
     ))
 
-    # file handler
     fh = logging.FileHandler(LOG_DIR / "scheduler.log")
     fh.setLevel(logging.INFO)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s  %(levelname)-8s  %(message)s"
-    ))
+    fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s"))
 
     logger.addHandler(ch)
     logger.addHandler(fh)
@@ -69,17 +73,16 @@ logger = setup_logging()
 
 
 # ==============================================================================
-# ALERTS TABLE SETUP
+# ALERTS TABLE
 # ==============================================================================
 
 def create_alerts_table() -> None:
     """
-    Creates the alerts table if it does not exist.
-    This is the trigger table the LangGraph agent will watch in Sprint 2.
+    Creates the alerts table if not exists.
+    This is the trigger table the LangGraph agent watches in Sprint 2.
 
-    Each row = one at-risk event for one store + SKU combination.
-    resolved = 0 means nobody has picked it up yet.
-    resolved = 1 means the agent has started working on it.
+    resolved = 0 -> pending, nobody has picked it up
+    resolved = 1 -> agent has started working on it
     """
     with engine.begin() as conn:
         conn.execute(text("""
@@ -90,7 +93,6 @@ def create_alerts_table() -> None:
                 stock_status    TEXT    NOT NULL,
                 days_of_cover   REAL,
                 risk_score      REAL,
-                previous_status TEXT,
                 triggered_at    TEXT    NOT NULL,
                 pipeline_id     TEXT,
                 resolved        INTEGER DEFAULT 0
@@ -100,17 +102,16 @@ def create_alerts_table() -> None:
 
 
 # ==============================================================================
-# JOB 1 — SIMULATE SALES (runs every N seconds)
+# JOB 1 — SIMULATE SALES
 # ==============================================================================
 
 def simulate_sales() -> None:
     """
     Picks 50 random inventory positions and deducts a small random
-    number of units from each — simulating real sales activity.
+    number of units — simulating real sales activity in the stores.
     """
     try:
         with engine.begin() as conn:
-
             positions = conn.execute(text("""
                 SELECT record_id, store_id, sku_id, current_stock_units
                 FROM   curated_inventory
@@ -123,10 +124,8 @@ def simulate_sales() -> None:
             for row in positions:
                 record_id     = row[0]
                 current_stock = row[3]
-
-                # sell between 0 and 8% of current stock
-                units_sold = random.randint(0, max(1, int(current_stock * 0.08)))
-                new_stock  = max(0, current_stock - units_sold)
+                units_sold    = random.randint(0, max(1, int(current_stock * 0.08)))
+                new_stock     = max(0, current_stock - units_sold)
 
                 if units_sold > 0:
                     conn.execute(text("""
@@ -143,19 +142,24 @@ def simulate_sales() -> None:
 
 
 # ==============================================================================
-# JOB 2 — RISK DETECTION (runs every 5 minutes)
+# JOB 2 — RISK DETECTION
 # ==============================================================================
 
 def run_risk_detection() -> None:
     """
-    Step 1: Recalculate days_of_cover using latest stock levels.
+    Step 1: Recalculate days_of_cover from latest stock levels.
     Step 2: Recalculate risk_score.
-    Step 3: Recalculate stock_status using dynamic threshold.
-    Step 4: Find new Critical/At Risk positions and write alerts.
+    Step 3: Recalculate stock_status using CORRECTED formula from RCC doc.
+    Step 4: Detect new Critical/At Risk positions and write alerts.
 
-    KEY FIX: All steps including alert inserts run inside the SAME
-    database connection. This prevents the SQLite 'database is locked'
-    error that occurs when two connections try to write simultaneously.
+    CORRECTED stock_status formula (from RCC bootcamp doc):
+        Critical  = days_of_cover < effective_lead_time x 0.5
+        At Risk   = days_of_cover >= effective_lead_time x 0.5
+                    AND days_of_cover < effective_lead_time x 1.0
+        Healthy   = days_of_cover >= effective_lead_time x 1.0
+        Overstock = current_stock_units > reorder_point x 3
+
+    All steps share the same DB connection to avoid SQLite locking errors.
     """
     try:
         with engine.begin() as conn:
@@ -172,32 +176,33 @@ def run_risk_detection() -> None:
             """))
 
             # Step 2: recalculate risk_score
-            # 60% weight on store stock vs reorder point
-            # 40% weight on warehouse backup stock
+            # 60% weight: store stock vs reorder point
+            # 40% weight: warehouse backup vs 3x reorder point
             conn.execute(text("""
                 UPDATE curated_inventory
-                SET    risk_score = ROUND(
-                    0.6 * MAX(0.0, MIN(1.0,
-                        1.0 - CAST(current_stock_units AS REAL) / NULLIF(reorder_point, 0)
-                    )) +
-                    0.4 * MAX(0.0, MIN(1.0,
-                        1.0 - CAST(warehouse_stock_units AS REAL) / NULLIF(reorder_point * 3, 0)
-                    )), 4)
-            """))
+                SET    risk_score = ROUND((0.6 * MAX(0.0, MIN(1.0,
+                              1.0 - CAST(current_stock_units AS REAL) / NULLIF(reorder_point, 0))) +
+                              0.4 * MAX(0.0, MIN(1.0, 
+                              1.0 - CAST(warehouse_stock_units AS REAL) / NULLIF(reorder_point * 3, 0)))) * 10, 2)
+                """))
 
-            # Step 3: recalculate stock_status with dynamic At Risk threshold
-            # threshold = effective_lead_time / 10 + 5
-            # e.g. lead 14 days -> threshold 6.4 days
-            # e.g. lead 45 days -> threshold 9.5 days
+            # Step 3: recalculate stock_status — CORRECTED formula
+            # effective_lead_time comes from curated_skus via subquery
+            # Critical threshold  = 50% of effective_lead_time
+            # At Risk threshold   = 100% of effective_lead_time
             conn.execute(text("""
                 UPDATE curated_inventory
                 SET    stock_status = CASE
                     WHEN current_stock_units = 0
                         THEN 'Critical'
-                    WHEN days_of_cover < 3
+                    WHEN days_of_cover < (
+                        SELECT COALESCE(cs.effective_lead_time * 0.5, 3.5)
+                        FROM   curated_skus cs
+                        WHERE  cs.sku_id = curated_inventory.sku_id
+                    )
                         THEN 'Critical'
                     WHEN days_of_cover < (
-                        SELECT COALESCE(cs.effective_lead_time / 10.0 + 5, 7)
+                        SELECT COALESCE(cs.effective_lead_time * 1.0, 7.0)
                         FROM   curated_skus cs
                         WHERE  cs.sku_id = curated_inventory.sku_id
                     )
@@ -209,22 +214,16 @@ def run_risk_detection() -> None:
                 END
             """))
 
-            # Step 4: detect new alerts and insert them
-            # IMPORTANT: pass conn into the function so we stay in the same
-            # transaction and avoid the database locked error
+            # Step 4: detect new alerts and insert — SAME connection (no lock)
             new_alerts = _detect_new_alerts(conn)
 
-        # logging happens AFTER the connection closes
+        # log outside connection block
         if new_alerts:
-            logger.warning(
-                f"Risk detection -- {len(new_alerts)} NEW alerts detected"
-            )
+            logger.warning(f"Risk detection -- {len(new_alerts)} NEW alerts detected")
             for alert in new_alerts:
                 logger.warning(
-                    f"  ALERT -> {alert['sku_id']} | "
-                    f"{alert['store_id']} | "
-                    f"{alert['stock_status']} | "
-                    f"doc={alert['days_of_cover']}d | "
+                    f"  ALERT -> {alert['sku_id']} | {alert['store_id']} | "
+                    f"{alert['stock_status']} | doc={alert['days_of_cover']}d | "
                     f"risk={alert['risk_score']}"
                 )
         else:
@@ -236,16 +235,10 @@ def run_risk_detection() -> None:
 
 def _detect_new_alerts(conn) -> list[dict]:
     """
-    Finds positions that are Critical or At Risk but do not yet
-    have an unresolved alert. Inserts new alert rows.
-
-    Takes conn as a parameter — uses the SAME connection that
-    run_risk_detection() already has open. This is the fix for
-    the database locked error.
-
+    Finds positions that are Critical or At Risk but have no unresolved alert.
+    Uses the passed connection — avoids opening a second connection (SQLite lock).
     Returns list of new alert dicts for logging.
     """
-    # find at-risk positions with no existing unresolved alert
     at_risk = conn.execute(text("""
         SELECT
             ci.sku_id,
@@ -257,8 +250,7 @@ def _detect_new_alerts(conn) -> list[dict]:
         FROM   curated_inventory ci
         WHERE  ci.stock_status IN ('Critical', 'At Risk')
         AND    NOT EXISTS (
-            SELECT 1
-            FROM   alerts a
+            SELECT 1 FROM alerts a
             WHERE  a.sku_id   = ci.sku_id
             AND    a.store_id = ci.store_id
             AND    a.resolved = 0
@@ -303,50 +295,42 @@ def _detect_new_alerts(conn) -> list[dict]:
 
 
 # ==============================================================================
-# STATUS REPORT (runs every 5 minutes)
+# STATUS REPORT
 # ==============================================================================
 
 def print_status_report() -> None:
-    """
-    Prints a one-line health summary to console and log file.
-    Shows current count of each stock_status and pending alerts.
-    """
+    """Prints a one-line health summary every 5 minutes."""
     try:
         with engine.connect() as conn:
-
             kpis = conn.execute(text("""
                 SELECT
-                    COUNT(*)                                                   AS total,
-                    COUNT(CASE WHEN stock_status = 'Critical'  THEN 1 END)    AS critical,
-                    COUNT(CASE WHEN stock_status = 'At Risk'   THEN 1 END)    AS at_risk,
-                    COUNT(CASE WHEN stock_status = 'Healthy'   THEN 1 END)    AS healthy,
-                    COUNT(CASE WHEN stock_status = 'Overstock' THEN 1 END)    AS overstock
+                    COUNT(*)                                                 AS total,
+                    COUNT(CASE WHEN stock_status='Critical'  THEN 1 END)    AS critical,
+                    COUNT(CASE WHEN stock_status='At Risk'   THEN 1 END)    AS at_risk,
+                    COUNT(CASE WHEN stock_status='Healthy'   THEN 1 END)    AS healthy,
+                    COUNT(CASE WHEN stock_status='Overstock' THEN 1 END)    AS overstock
                 FROM curated_inventory
             """)).fetchone()
 
-            pending = conn.execute(text("""
-                SELECT COUNT(*) FROM alerts WHERE resolved = 0
-            """)).scalar()
+            pending = conn.execute(text(
+                "SELECT COUNT(*) FROM alerts WHERE resolved = 0"
+            )).scalar()
 
         logger.info(
             f"STATUS | Critical={kpis[1]} | At Risk={kpis[2]} | "
             f"Healthy={kpis[3]} | Overstock={kpis[4]} | "
             f"Pending alerts={pending}"
         )
-
     except Exception as e:
         logger.error(f"print_status_report error: {e}")
 
 
 # ==============================================================================
-# ONE-CYCLE RUN — for testing
+# ONE-CYCLE RUN
 # ==============================================================================
 
 def run_once() -> None:
-    """
-    Runs one complete cycle and exits.
-    Use this to test: python data/scheduler.py --once
-    """
+    """Runs one full cycle and exits. For testing."""
     logger.info("Running one cycle (--once mode)")
     simulate_sales()
     run_risk_detection()
@@ -376,14 +360,13 @@ def main() -> None:
         run_once()
         return
 
-    logger.info(f"ORCA Scheduler starting | sales interval={args.interval}s")
+    logger.info(f"ORCA Scheduler starting | interval={args.interval}s")
     logger.info(f"DB: {DB_PATH}")
     logger.info(f"Logs: {LOG_DIR / 'scheduler.log'}")
     logger.info("Press Ctrl+C to stop")
 
     scheduler = BlockingScheduler()
 
-    # Job 1: simulate sales every N seconds
     scheduler.add_job(
         simulate_sales,
         trigger="interval",
@@ -392,7 +375,6 @@ def main() -> None:
         name="Sales Simulation",
     )
 
-    # Job 2: risk detection every 5 minutes
     scheduler.add_job(
         run_risk_detection,
         trigger="interval",
@@ -401,8 +383,7 @@ def main() -> None:
         name="Risk Detection",
     )
 
-    # Job 3: status report every 5 minutes
-    # offset by 30 seconds so it runs after risk detection finishes
+    # offset by 30s so status report runs after risk detection finishes
     scheduler.add_job(
         print_status_report,
         trigger="interval",
@@ -412,7 +393,7 @@ def main() -> None:
         name="Status Report",
     )
 
-    # run once immediately on startup so you see current state right away
+    # run immediately on startup to show current state
     run_risk_detection()
     print_status_report()
 
