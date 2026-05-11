@@ -90,6 +90,8 @@ def get_inventory_position(store_id: str, sku_id: str) -> Optional[dict]:
             ci.reorder_triggered,
             ci.last_replenishment_date,
             ci.next_delivery_date,
+            ci.projected_demand,
+            ci.projected_shortfall,
             -- joined store fields (L1)
             cst.store_name,
             cst.region,
@@ -140,6 +142,8 @@ def get_all_positions_for_sku(sku_id: str) -> list[dict]:
             ci.stock_status,
             ci.coverage_gap_units,
             ci.risk_score,
+            ci.projected_demand,
+            ci.projected_shortfall,
             cst.store_name,
             cst.tier,
             cst.region,

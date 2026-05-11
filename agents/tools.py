@@ -5,7 +5,7 @@ The 6 tools available to the LangGraph agent.
 
 HOW THIS FILE RELATES TO queries.py:
 --------------------------------------
-queries.py  = raw data access functions (SQL → dict)
+queries.py  = raw data access functions (SQL -> dict)
 tools.py    = LangChain @tool wrappers around those functions
 
 Each @tool function here either:
@@ -16,10 +16,10 @@ Each @tool function here either:
 Explicit mapping:
 
     TOOL FUNCTION               QUERIES.PY FUNCTION(S) CALLED
-    ─────────────────────────────────────────────────────────────────
+    -----------------------------------------------------------------
     check_inventory_positions   get_all_positions_for_sku()
                                 + adds: critical_count, at_risk_count,
-                                  total_current_stock as summary
+                                  total_current_stock, total_projected_shortfall
 
     get_sku_info                get_sku_details()
                                 thin wrapper, same return value
@@ -40,18 +40,14 @@ Explicit mapping:
 WHY DIFFERENT NAMES FROM queries.py:
 --------------------------------------
 Tool names are written for the LLM to read, not for developers.
-"check_inventory_positions" is more natural for an agent reasoning
-about inventory than "get_all_positions_for_sku".
-The docstrings are also written for the LLM — they tell it WHEN
-and HOW to call each tool, not just what the function does.
+The docstrings tell the LLM WHEN and HOW to call each tool.
 
 WHAT IS NOT IN tools.py:
 --------------------------------------
-writeback functions       → used directly in graph.py nodes only,
-                            not exposed as free agent tools
-get_critical_alerts()     → used by graph.py to find alerts to process
-get_tier1_stores_for_sku  → used directly in graph.py Agent 2 node
-dashboard query functions → used by dashboard/app.py only
+writeback functions       -> used directly in graph.py nodes only
+get_critical_alerts()     -> used by graph.py to find alerts to process
+get_tier1_stores_for_sku  -> used directly in graph.py Agent 2 node
+dashboard query functions -> used by dashboard/app.py only
 """
 
 import sys
@@ -72,7 +68,10 @@ from db.queries import (
 
 # ── Tool 1 ────────────────────────────────────────────────────────────────────
 # Calls: get_all_positions_for_sku()
-# Extra: adds critical_count, at_risk_count, total_current_stock summary
+# FIX 3: now also sums projected_shortfall across all positions
+# and surfaces it as total_projected_shortfall in the summary dict.
+# This gives Agent 1 the total shortfall number it needs for demand_summary
+# without having to loop through positions itself.
 
 @tool
 def check_inventory_positions(sku_id: str) -> dict:
@@ -84,35 +83,50 @@ def check_inventory_positions(sku_id: str) -> dict:
         - sku_id: the SKU analysed
         - critical_count: number of stores in Critical status
         - at_risk_count: number of stores in At Risk status
-        - total_current_stock: total units across all at-risk stores
-        - positions: list of store positions with store_id, stock,
-          days_of_cover, stock_status, tier, store_priority_score
+        - total_current_stock: total units currently in stock across all
+          at-risk stores
+        - total_projected_shortfall: total units shortfall across all
+          at-risk stores — use this as the shortfall value in demand_summary
+        - positions: full list of store positions including store_id, stock,
+          days_of_cover, stock_status, tier, store_priority_score,
+          projected_demand, projected_shortfall per store
 
-    Use this to understand HOW MANY stores are affected and HOW SEVERE
-    the situation is before making any recommendation.
+    Use this to understand HOW MANY stores are affected, HOW SEVERE the
+    situation is, and WHAT THE TOTAL SHORTFALL IS before making any
+    recommendation.
     """
     positions = get_all_positions_for_sku(sku_id)
 
     if not positions:
         return {
-            "sku_id":              sku_id,
-            "critical_count":      0,
-            "at_risk_count":       0,
-            "total_current_stock": 0,
-            "positions":           [],
-            "message":             "No critical or at-risk positions found for this SKU."
+            "sku_id":                    sku_id,
+            "critical_count":            0,
+            "at_risk_count":             0,
+            "total_current_stock":       0,
+            "total_projected_shortfall": 0,
+            "positions":                 [],
+            "message": "No critical or at-risk positions found for this SKU."
         }
 
     critical    = [p for p in positions if p["stock_status"] == "Critical"]
     at_risk     = [p for p in positions if p["stock_status"] == "At Risk"]
     total_stock = sum(p["current_stock_units"] for p in positions)
 
+    # FIX 3: sum projected_shortfall across all positions
+    # projected_shortfall is now in curated_inventory (added in transforms.py Fix 2)
+    # each position has its own shortfall — we sum them for the SKU total
+    total_shortfall = sum(
+        p.get("projected_shortfall", 0) or 0
+        for p in positions
+    )
+
     return {
-        "sku_id":              sku_id,
-        "critical_count":      len(critical),
-        "at_risk_count":       len(at_risk),
-        "total_current_stock": total_stock,
-        "positions":           positions,
+        "sku_id":                    sku_id,
+        "critical_count":            len(critical),
+        "at_risk_count":             len(at_risk),
+        "total_current_stock":       total_stock,
+        "total_projected_shortfall": total_shortfall,
+        "positions":                 positions,
     }
 
 
@@ -132,6 +146,7 @@ def get_sku_info(sku_id: str) -> dict:
         - effective_lead_time: lead time adjusted for supplier reliability
         - event_uplift_factor: demand multiplier from any active upcoming event
         - reorder_point, min_order_qty, unit_cost_aed, supplier_id
+        - margin_priority_rank: rank within category by gross margin (1 = best)
 
     Use this AFTER check_inventory_positions to understand the product's
     commercial importance (abc_class, margin) and supply constraints
@@ -151,8 +166,8 @@ def get_sku_info(sku_id: str) -> dict:
 def get_supplier_info(sku_id: str) -> dict:
     """
     Resolves supplier contact and terms for a given SKU.
-    Always call this before recommending any replenishment action —
-    the supplier contact must never be hardcoded.
+    Always call this before recommending any replenishment action.
+    The supplier contact must never be hardcoded — always resolved here.
 
     Returns a dict with:
         - supplier_name, country, contact_name, contact_email
@@ -161,6 +176,7 @@ def get_supplier_info(sku_id: str) -> dict:
         - min_order_value_aed, reliability_score (1.0 to 5.0)
 
     Use allows_expedite to determine if Option C (expedite) is available.
+    If allows_expedite is False, Option C must be eliminated immediately.
     Use contact_name and contact_email in the HITL briefing so the human
     planner knows exactly who to call.
     """
@@ -186,9 +202,9 @@ def get_demand_velocity(sku_id: str) -> dict:
         - event_baseline_uplift: historical uplift ratio during event periods
           vs regular periods (e.g. 2.8 means 2.8x normal demand during events)
 
-    Use avg_daily_demand to calculate:
-        projected_demand = avg_daily_demand x event_uplift_factor x lead_time_days
-        projected_shortfall = projected_demand - total_current_stock
+    Use avg_daily_demand to verify projected_demand calculations.
+    projected_demand is already pre-computed in the database but this
+    gives you the raw velocity for your own reasoning.
     """
     velocity = get_sales_velocity(sku_id)
     return velocity
@@ -207,14 +223,17 @@ def check_active_events(category: str) -> dict:
     Returns a dict with:
         - events_found: number of relevant events
         - events: list of events, each with event_name, demand_uplift_pct,
-          start_date, end_date, planning_lead_days, affected_region
+          start_date, end_date, duration_days, planning_lead_days,
+          affected_region
 
-    Use demand_uplift_pct to adjust projected_demand:
-        uplift_factor = 1 + (demand_uplift_pct / 100)
-        projected_demand = avg_daily_demand x uplift_factor x duration_days
+    Use demand_uplift_pct to verify the event_uplift_factor:
+        event_uplift_factor = 1 + (demand_uplift_pct / 100)
 
-    If events_found = 0, use event_uplift_factor = 1.0 (no adjustment).
-    If lead_time_days > days_until_event_start, set lead_time_too_late = True.
+    If events_found = 0, set event_uplift_factor = 1.0 and event_name = None.
+
+    To determine lead_time_too_late:
+        days_until_event = (start_date - today).days
+        lead_time_too_late = effective_lead_time > days_until_event
     """
     events = get_active_events_for_category(category)
     return {
@@ -239,16 +258,17 @@ def check_capital_budgets(pool_id: str = None) -> dict:
     Each pool includes:
         - pool_id, pool_name, available_aed, utilization_pct
         - pool_pressure_flag: LOW, MEDIUM, or HIGH
-          HIGH means the pool is constrained — eliminate options using this pool
+          HIGH means the pool is constrained — eliminate ALL options using it
         - auto_approve_limit_aed: orders below this need no human approval
-        - approval_threshold_aed: orders above this go to owner_dept for sign-off
+        - approval_threshold_aed: orders above this go to owner_dept
 
-    Use this to:
-        1. Check if a pool is HIGH pressure before assigning an option to it
-        2. Determine if approval_required = True (cost > auto_approve_limit_aed)
+    Standard pool assignments:
+        Option A (standard order) -> CP001
+        Option B (profit max)     -> CP001
+        Option C (expedite)       -> CP003
 
-    Call with no pool_id first to see all pools and their pressure flags.
-    Then call with a specific pool_id to get exact budget numbers.
+    Call with no pool_id first to check all pool pressure flags.
+    Then call with specific pool_id to get exact available_aed and limits.
     """
     if pool_id:
         pool = get_capital_pool(pool_id)
@@ -272,35 +292,44 @@ if __name__ == "__main__":
     alerts = get_critical_alerts()
 
     if not alerts:
-        print("No alerts found — run scheduler first")
+        print("No alerts found -- run scheduler first")
     else:
-        top     = alerts[0]
-        sku_id  = top["sku_id"]
+        top    = alerts[0]
+        sku_id = top["sku_id"]
         print(f"Testing with top alert SKU: {sku_id}\n")
 
         print("-- Tool 1: check_inventory_positions --")
         result = check_inventory_positions.invoke({"sku_id": sku_id})
         print(f"  critical={result['critical_count']} "
               f"at_risk={result['at_risk_count']} "
-              f"total_stock={result['total_current_stock']}")
+              f"total_stock={result['total_current_stock']} "
+              f"total_shortfall={result['total_projected_shortfall']}")
+        if result["positions"]:
+            p = result["positions"][0]
+            print(f"  sample position -> store={p['store_id']} "
+                  f"stock={p['current_stock_units']} "
+                  f"shortfall={p.get('projected_shortfall', 'N/A')}")
 
         print("\n-- Tool 2: get_sku_info --")
         result = get_sku_info.invoke({"sku_id": sku_id})
         print(f"  {result.get('sku_name')} | abc={result.get('abc_class')} "
               f"| margin={result.get('gross_margin_pct')}% "
-              f"| effective_lead={result.get('effective_lead_time')}d")
+              f"| effective_lead={result.get('effective_lead_time')}d "
+              f"| margin_rank={result.get('margin_priority_rank')}")
 
         print("\n-- Tool 3: get_supplier_info --")
         result = get_supplier_info.invoke({"sku_id": sku_id})
         print(f"  {result.get('supplier_name')} | "
               f"contact={result.get('contact_name')} | "
               f"email={result.get('contact_email')} | "
-              f"expedite={result.get('allows_expedite')}")
+              f"expedite={result.get('allows_expedite')} | "
+              f"premium={result.get('expedite_premium_pct')}%")
 
         print("\n-- Tool 4: get_demand_velocity --")
         result = get_demand_velocity.invoke({"sku_id": sku_id})
         print(f"  avg_daily_demand={result.get('avg_daily_demand')} | "
-              f"trend_7d={result.get('demand_trend_7d')}")
+              f"trend_7d={result.get('demand_trend_7d')} | "
+              f"event_baseline_uplift={result.get('event_baseline_uplift')}")
 
         print("\n-- Tool 5: check_active_events --")
         sku    = get_sku_info.invoke({"sku_id": sku_id})
@@ -308,21 +337,25 @@ if __name__ == "__main__":
             {"category": sku.get("category", "Dates")}
         )
         print(f"  events_found={result['events_found']}")
-        for e in result["events"]:
-            print(f"  {e['event_name']} | uplift={e['demand_uplift_pct']}%")
+        for e in result["events"][:3]:
+            print(f"  {e['event_name']} | uplift={e['demand_uplift_pct']}% "
+                  f"| duration={e.get('duration_days')}d "
+                  f"| lead={e['planning_lead_days']}d")
 
         print("\n-- Tool 6: check_capital_budgets (all pools) --")
         result = check_capital_budgets.invoke({})
         print(f"  total_pools={result['total_pools']}")
-        for p in result["pools"][:3]:
+        for p in result["pools"]:
             print(f"  {p['pool_id']} | {p['pool_name'][:30]:<30} "
-                  f"| avail=AED {p['available_aed']:>10,.0f} "
+                  f"| avail=AED {p['available_aed']:>12,.0f} "
+                  f"| auto_approve=AED {p['auto_approve_limit_aed']:>8,.0f} "
                   f"| {p['pool_pressure_flag']}")
 
-        print("\n-- Tool 6: check_capital_budgets (specific pool) --")
+        print("\n-- Tool 6: check_capital_budgets (CP001 specific) --")
         result = check_capital_budgets.invoke({"pool_id": "CP001"})
         print(f"  {result.get('pool_name')} | "
               f"available=AED {result.get('available_aed'):,.0f} | "
-              f"auto_approve_limit=AED {result.get('auto_approve_limit_aed'):,.0f}")
+              f"auto_approve=AED {result.get('auto_approve_limit_aed'):,.0f} | "
+              f"pressure={result.get('pool_pressure_flag')}")
 
     print("\nAll tools working.\n")

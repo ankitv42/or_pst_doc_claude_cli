@@ -60,3 +60,82 @@
 2026-05-07 18:18:23,960  WARNING     ALERT -> SKU00082 | STR0090 | Critical | doc=0.9d | risk=0.7668
 2026-05-07 18:18:23,963  INFO      STATUS | Critical=109 | At Risk=268 | Healthy=335 | Overstock=1288 | Pending alerts=20
 2026-05-07 18:18:23,964  INFO      One cycle complete
+2026-05-08 13:02:35,324  INFO      alerts table ready
+2026-05-08 13:02:35,325  INFO      Running one cycle (--once mode)
+2026-05-08 13:02:35,360  INFO      Sales simulation -- 48 positions updated
+2026-05-08 13:02:35,411  WARNING   Risk detection -- 20 NEW alerts detected
+2026-05-08 13:02:35,412  WARNING     ALERT -> SKU00078 | STR0134 | Critical | doc=3.8d | risk=0.7655
+2026-05-08 13:02:35,412  WARNING     ALERT -> SKU00066 | STR0179 | Critical | doc=0.9d | risk=0.7557
+2026-05-08 13:02:35,412  WARNING     ALERT -> SKU00039 | STR0121 | Critical | doc=1.3d | risk=0.7518
+2026-05-08 13:02:35,412  WARNING     ALERT -> SKU00095 | STR0039 | Critical | doc=0.7d | risk=0.7456
+2026-05-08 13:02:35,413  WARNING     ALERT -> SKU00101 | STR0022 | Critical | doc=3.1d | risk=0.7216
+2026-05-08 13:02:35,413  WARNING     ALERT -> SKU00017 | STR0107 | Critical | doc=2.0d | risk=0.7174
+2026-05-08 13:02:35,413  WARNING     ALERT -> SKU00008 | STR0051 | Critical | doc=1.5d | risk=0.7167
+2026-05-08 13:02:35,413  WARNING     ALERT -> SKU00078 | STR0051 | Critical | doc=2.5d | risk=0.7133
+2026-05-08 13:02:35,413  WARNING     ALERT -> SKU00033 | STR0130 | Critical | doc=2.0d | risk=0.7112
+2026-05-08 13:02:35,414  WARNING     ALERT -> SKU00008 | STR0013 | Critical | doc=0.4d | risk=0.7089
+2026-05-08 13:02:35,414  WARNING     ALERT -> SKU00090 | STR0126 | Critical | doc=3.4d | risk=0.7076
+2026-05-08 13:02:35,414  WARNING     ALERT -> SKU00038 | STR0020 | Critical | doc=1.5d | risk=0.7073
+2026-05-08 13:02:35,414  WARNING     ALERT -> SKU00038 | STR0184 | Critical | doc=2.3d | risk=0.706
+2026-05-08 13:02:35,414  WARNING     ALERT -> SKU00061 | STR0104 | Critical | doc=1.5d | risk=0.705
+2026-05-08 13:02:35,414  WARNING     ALERT -> SKU00037 | STR0158 | Critical | doc=1.3d | risk=0.7044
+2026-05-08 13:02:35,415  WARNING     ALERT -> SKU00040 | STR0154 | Critical | doc=1.6d | risk=0.7042
+2026-05-08 13:02:35,415  WARNING     ALERT -> SKU00063 | STR0016 | Critical | doc=0.7d | risk=0.7036
+2026-05-08 13:02:35,415  WARNING     ALERT -> SKU00036 | STR0018 | Critical | doc=0.5d | risk=0.6977
+2026-05-08 13:02:35,415  WARNING     ALERT -> SKU00079 | STR0199 | Critical | doc=5.0d | risk=0.6966
+2026-05-08 13:02:35,415  WARNING     ALERT -> SKU00075 | STR0058 | Critical | doc=0.6d | risk=0.6963
+2026-05-08 13:02:35,417  INFO      STATUS | Critical=669 | At Risk=518 | Healthy=103 | Overstock=710 | Pending alerts=40
+2026-05-08 13:02:35,418  INFO      One cycle complete
+2026-05-08 16:17:28,295  INFO      alerts table ready
+2026-05-08 16:17:28,296  INFO      Running one cycle (--once mode)
+2026-05-08 16:17:28,331  INFO      Sales simulation -- 50 positions updated
+2026-05-08 16:17:28,340  ERROR     run_risk_detection error: (sqlite3.OperationalError) near "UPDATE": syntax error
+[SQL: 
+                UPDATE curated_inventory
+                SET    risk_score = ROUND(
+                    0.6 * MAX(0.0, MIN(1.0,
+                        1.0 - CAST(current_stock_units AS REAL)
+                            / NULLIF(reorder_point, 0)
+                    )) +
+                    0.4 * MAX(0.0, MIN(1.0,
+                        1.0 - CAST(warehouse_stock_units AS REAL)
+                            / NULLIF(reorder_point * 3, 0)
+                    )), 4)
+                              
+
+
+                UPDATE curated_inventory
+                SET    risk_score = ROUND((0.6 * MAX(0.0, MIN(1.0,
+                              1.0 - CAST(current_stock_units AS REAL) / NULLIF(reorder_point, 0))) +
+                              0.4 * MAX(0.0, MIN(1.0, 
+                              1.0 - CAST(warehouse_stock_units AS REAL) / NULLIF(reorder_point * 3, 0)))) * 10, 2)
+                ]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-05-08 16:17:28,343  INFO      STATUS | Critical=468 | At Risk=101 | Healthy=106 | Overstock=1325 | Pending alerts=40
+2026-05-08 16:17:28,344  INFO      One cycle complete
+2026-05-08 16:19:00,973  INFO      alerts table ready
+2026-05-08 16:19:00,973  INFO      Running one cycle (--once mode)
+2026-05-08 16:19:00,994  INFO      Sales simulation -- 50 positions updated
+2026-05-08 16:19:01,061  WARNING   Risk detection -- 20 NEW alerts detected
+2026-05-08 16:19:01,061  WARNING     ALERT -> SKU00004 | STR0007 | Critical | doc=1.6d | risk=6.94
+2026-05-08 16:19:01,062  WARNING     ALERT -> SKU00016 | STR0055 | Critical | doc=3.2d | risk=6.94
+2026-05-08 16:19:01,062  WARNING     ALERT -> SKU00014 | STR0060 | Critical | doc=1.2d | risk=6.9
+2026-05-08 16:19:01,062  WARNING     ALERT -> SKU00078 | STR0079 | Critical | doc=1.5d | risk=6.89
+2026-05-08 16:19:01,063  WARNING     ALERT -> SKU00058 | STR0054 | Critical | doc=1.0d | risk=6.83
+2026-05-08 16:19:01,063  WARNING     ALERT -> SKU00017 | STR0130 | Critical | doc=2.3d | risk=6.82
+2026-05-08 16:19:01,063  WARNING     ALERT -> SKU00079 | STR0168 | Critical | doc=4.9d | risk=6.81
+2026-05-08 16:19:01,064  WARNING     ALERT -> SKU00009 | STR0010 | Critical | doc=0.8d | risk=6.79
+2026-05-08 16:19:01,064  WARNING     ALERT -> SKU00044 | STR0142 | Critical | doc=2.3d | risk=6.79
+2026-05-08 16:19:01,064  WARNING     ALERT -> SKU00059 | STR0138 | Critical | doc=1.0d | risk=6.74
+2026-05-08 16:19:01,065  WARNING     ALERT -> SKU00063 | STR0124 | Critical | doc=3.9d | risk=6.73
+2026-05-08 16:19:01,065  WARNING     ALERT -> SKU00012 | STR0064 | At Risk | doc=6.6d | risk=6.71
+2026-05-08 16:19:01,065  WARNING     ALERT -> SKU00101 | STR0053 | Critical | doc=1.6d | risk=6.68
+2026-05-08 16:19:01,066  WARNING     ALERT -> SKU00006 | STR0005 | Critical | doc=1.0d | risk=6.64
+2026-05-08 16:19:01,066  WARNING     ALERT -> SKU00008 | STR0066 | Critical | doc=1.1d | risk=6.64
+2026-05-08 16:19:01,067  WARNING     ALERT -> SKU00034 | STR0122 | Critical | doc=5.5d | risk=6.6
+2026-05-08 16:19:01,067  WARNING     ALERT -> SKU00066 | STR0155 | Critical | doc=5.4d | risk=6.51
+2026-05-08 16:19:01,068  WARNING     ALERT -> SKU00040 | STR0174 | Critical | doc=3.2d | risk=6.51
+2026-05-08 16:19:01,068  WARNING     ALERT -> SKU00066 | STR0034 | Critical | doc=6.9d | risk=6.48
+2026-05-08 16:19:01,068  WARNING     ALERT -> SKU00077 | STR0110 | Critical | doc=4.3d | risk=6.48
+2026-05-08 16:19:01,072  INFO      STATUS | Critical=669 | At Risk=518 | Healthy=105 | Overstock=708 | Pending alerts=60
+2026-05-08 16:19:01,072  INFO      One cycle complete
