@@ -136,7 +136,7 @@ def get_embedding_fn(verbose: bool = True):
 # ==============================================================================
 
 # This is the “data preparation” stage before embeddings + vector DB.
-def parse_and_chunk_pdf(pdf_path: Path, base_metadata: dict) -> list[dict]:
+def parse_and_chunk_pdf(pdf_path: Path, base_metadata: dict) -> list[dict]: 
     """
     Parses a PDF with Docling and chunks with HybridChunker.
  
@@ -161,6 +161,31 @@ def parse_and_chunk_pdf(pdf_path: Path, base_metadata: dict) -> list[dict]:
     origin → "table_cell" ← this chunk came from inside a table, not a paragraph
     So origin is the document structure type of where the text lived before it became a chunk. It's useful for filtering — e.g., "only search table chunks" or "ignore footer chunks."  
 
+    so we entered this function with base_metadata as:
+
+    {
+   "doc_type": "supplier",
+   "title": "Supplier SLA",
+   "agent_relevance": "2,4"
+    }
+
+    and exit with very enriched chunk_metadata:
+    
+    {
+   "doc_type": "supplier",
+   "title": "Supplier SLA",
+   "agent_relevance": "2,4",
+
+   "chunk_index": 1,
+   "section_name": "PAYMENT RULES",
+   "heading_path": "SECTION 1 > PAYMENT RULES",
+   "element_type": "table",
+   "page_number": 3,
+   "doc_file": "supplier_sla.pdf"
+    }
+
+
+    
     """
     try:
         from docling.document_converter import DocumentConverter # using docling bcz PyPDFLodaer() simply extract raw text.table reduced to txt etc etc,
@@ -188,15 +213,17 @@ def parse_and_chunk_pdf(pdf_path: Path, base_metadata: dict) -> list[dict]:
     )
     result = converter.convert(str(pdf_path))
     
-    doc = result.document                                   # doc contains structured representation.Not plain text.VERY important concept.
+    doc = result.document                # doc contains structured representation.Not plain text.VERY important concept. 
+                                         # So a pdf is becoming a DoclingDocument with inside it (sections=[...],tables=[...],headings=[...],paragraphs=[...])
+                                         # Headings Paragraphs Tables Footers Sections Page numbers Hierarchy etc inside the object 
 
-    print(f"    Chunking with HybridChunker...")
+    print(f"    Chunking with HybridChunker...") # This is where:structured document becomes retrieval-ready semantic chunks
     chunker = HybridChunker(tokenizer="sentence-transformers/all-MiniLM-L6-v2",  # Smart splitting engine.This tokenizer is NOT generating embeddings. It is only: counting tokens
                             max_token=512,      # Why? Because embedding models have token limits. Example: max 512 tokens max 1024 tokens Chunker must know: “How many tokens is this text?”
                             merge_peers=True)   # This means: small neighboring chunks can merge together. Without this: you may get tiny useless chunks    
     chunks_raw = list(chunker.chunk(doc))       # very imp line. convert Structured document into Multiple semantic chunks, 
                                                 # Each chunk: meaningful, section aware, token-aware
-    chunks = []
+    chunks = []    # we will do metadata enrichment of raw_chunk of convert in the format chunk which chromadb expects
 
     for i, chunk in enumerate(chunks_raw):
         text = chunk.text.strip()
@@ -500,19 +527,20 @@ def run_ingestion(reset: bool = False) -> None:
 
 
 # ==============================================================================
-# VERIFICATION — tests retrieval quality
+# VERIFICATION — tests retrieval quality, unit testing for retrieval systems
 # ==============================================================================
 
 def verify_ingestion() -> None:
     print("  Verification — testing retrieval quality\n")
-    embedding_fn, _ = get_embedding_fn(verbose=False)
-    client     = get_client()
-    collection = get_collection(client, embedding_fn)
+    embedding_fn, _ = get_embedding_fn(verbose=False) # query embeddings must use SAME embedding model
+    client     = get_client()                         # Creates DB connection.
+    collection = get_collection(client, embedding_fn) # LOAD COLLECTION, Now Collection represents orca_knowledge vector database already containing: embeddings, metadata, chunk text
 
+    # synthetic evaluation queries, "Let's test whether retrieval works properly."
     test_cases = [
         {
-            "agent":  "Agent 1",
-            "query":  "Class A SKU ordering rules CRITICAL urgency lead_time_too_late",
+            "agent":  "Agent 1",                                                                # Pretend Agent 1 asked this query.And retriever should ONLY search:
+            "query":  "Class A SKU ordering rules CRITICAL urgency lead_time_too_late",         # policy docs + graph docs
             "filter": {"doc_type": {"$in": ["policy", "graph"]}},
         },
         {
@@ -544,21 +572,27 @@ def verify_ingestion() -> None:
 
 
     scores = []
-    for tc in test_cases:
+    for tc in test_cases:                                        # loop over test case
         try:
-            results = collection.query(
-                query_texts=[tc["query"]],
-                n_results=1,
-                where=tc["filter"],
-                include=["documents", "distances", "metadatas"],
+            results = collection.query(                          # This is: semantic retrieval
+                query_texts=[tc["query"]],                       # query_texts=[ "Class A SKU ordering rules..." ]
+                n_results=1,                                     # return TOP 1 best chunk
+                where=tc["filter"],                              # ONLY search chunks whose metadata has: doc_type = policy OR graph
+                include=["documents", "distances", "metadatas"], # Meaning: return: chunk text, similarity score and  metadata
             )
+            '''
+            Once the query is fired, Query embedding is generated , filter is applied to get those chunk from chroma db which satisfies the filter criteria of doc_type.
+            suppose these are 10 such chunks. now all chunks embeddings is cosinely matched with query embedding. Top 1 best chunk is choosen with its cosinal distance.
+            chroma return: document/text, distance and metadata
+            Chroma returns: DISTANCE NOT similarity score directly. Lower distance = better match.
+            '''
             if results["documents"] and results["documents"][0]:
                 chunk    = results["documents"][0][0]
                 meta     = results["metadatas"][0][0]
                 distance = results["distances"][0][0]
-                score    = round(1 - distance, 3)
+                score    = round(1 - distance, 3)                # convert distance to score , so a 0.22 distance means 0.78 score, because Humans understand:higher = better
                 scores.append(score)
-                quality  = "✅ GOOD" if score > 0.45 else "⚠  LOW"
+                quality  = "✅ GOOD" if score > 0.45 else "⚠  LOW" 
                 print(f"  [{tc['agent']}] {quality} (score={score})")
                 print(f"    Query   : {tc['query'][:65]}...")
                 print(f"    Source  : {meta.get('title','')} [{meta.get('doc_type','')}]")
