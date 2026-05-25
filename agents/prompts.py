@@ -136,6 +136,9 @@ SALES VELOCITY:
  
 ACTIVE EVENTS for this SKU category:
 {active_events}
+
+POLICY KNOWLEDGE (ordering rules, event planning context, supplier-pool chains):
+{policy_context}
  
 Produce the demand_summary JSON now."""
     )
@@ -294,6 +297,10 @@ SUPPLIER DATA:
  
 TIER-1 STORES WITH AT-RISK POSITIONS:
 {tier1_stores}
+
+
+POLICY KNOWLEDGE (supplier SLA rules, expedite decision rules, option building rules):
+{policy_context}
  
 Build the options_package JSON now."""
     )
@@ -429,6 +436,9 @@ CAPITAL POOL CP001:
  
 CAPITAL POOL CP003:
 {cp003_data}
+
+POLICY KNOWLEDGE (capital pool rules, scoring formula, approval thresholds):
+{policy_context}
  
 Produce the capital_decision JSON now."""
     )
@@ -534,6 +544,10 @@ CAPITAL DECISION (Agent 3 output):
  
 SUPPLIER CONTACT:
 {supplier_data}
+
+
+POLICY KNOWLEDGE (HITL briefing format, contact resolution rules):
+{policy_context}
  
 Generate the briefing text now."""
     )

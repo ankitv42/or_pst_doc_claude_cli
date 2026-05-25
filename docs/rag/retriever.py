@@ -42,7 +42,7 @@ sys.path.append(Path(__name__).parent.parent.parent)
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-CHROMA_DIR = Path(__name__).parent.parent.parent / "db" / "chroma"
+CHROMA_DIR = Path(__file__).parent.parent.parent / "db" / "chroma"
 COLLECTION_NAME = "orca_knowledge"
 
 EMBEDDING_MODEL_PRIMARY  = "nomic-ai/nomic-embed-text-v1.5"
@@ -675,8 +675,28 @@ class ORCARetriever:
     def _format_context(self, chunks: list[dict], label: str = "") -> str: # This converts chunks into: LLM-ready prompt context
         """
         Formats retrieved chunks into prompt-injectable context string.
-        Prepends PRIORITY RULE — database always wins over this context.
+        Prepends PRIORITY RULE — database always wins over this context.  Line: 530
         Includes source metadata for transparency.
+
+        INPUT
+        -----
+        [
+            {
+                "text": "...",
+                "metadata": {...}
+            }
+        ]
+
+        OUTPUT
+        ------
+        [Policy] | Emergency Procurement
+
+        Summary:
+        Class A ordering rules...
+
+        Actual chunk text...
+
+
         """
         if not chunks:
             return f"No relevant {label} knowledge found."
@@ -705,6 +725,19 @@ class ORCARetriever:
  
     # ── DEDUPLICATE ───────────────────────────────────────────────────────
  
+    '''
+    Simple:
+        remove duplicate chunks.
+
+        Because:
+
+        vector search
+        BM25
+        multiple queries
+
+        may retrieve same chunk repeatedly.
+    '''
+
     def _dedup(self, *chunk_lists: list[dict]) -> list[dict]:
         seen = set()
         result = []
@@ -717,7 +750,84 @@ class ORCARetriever:
  
     # ===========================================================================
     # PUBLIC API — one method per agent
-    # Each method fires multiple targeted queries for maximum coverage
+    """
+    Everything before this section was infrastructure:
+    BM25Index — the keyword search engine, rf_fuse — the merger, BGEReranker — the reranker
+    _hybrid_retrieve, _rerank, _corrective_retry — the internal plumbing
+
+    All of that is the engine under the hood. You never call those directly.
+    The PUBLIC API section is the steering wheel. These are the only functions that graph.py will ever call.
+
+    Below we have one method per agent. In graph.py, we will call these method retriver.query_for_agent1 like this.
+    Idea is to get the values from agent state and for each agent pass those values here. These methods will create a query string based on params, pass these
+    query to the chroma db and get aditional context for the query using RAG, then finally pass these context to the LLM. So , LLM has two source of info for the query
+
+    1. FACTS (live data) ( comming from orca.db)
+        How many units left in each store?  What does the supplier charge?
+    2. Knowledge, rules (comming from knowledge base - the 5 pdf)
+        What is the policy for Class B SKUs? What happens during Dubai Shopping Festival?
+
+    Agent 1,2,3,4 node in graph.py will call these methods with real values from AgentState. The method returns a formatted string that goes into the respective prompt.
+
+    Below are the methods for each Agent.
+    1. Agent 1: Demand Intelligence Agent. Its tasks is understand the demand situation from the knowledge base. Needs: ordering rules + event context + supplier-pool chain
+                With Inputs: category="Electronics" abc_class="B" urgency="CRITICAL" lead_time_too_late=True event_name="DSF"
+                policy event graph ← searches only these 3 doc types
+                forms query for knowledge base:
+                    Q1 "ordering rules Class B SKU CRITICAL urgency lead_time_too_late expedite mandatory" (query is not in proper sentence but keywords as we go goolge right , no proper sentence right)
+                    meaning of query - finds Class B policy + expedite mandatory rules chunks
+
+                    Q2 "demand uplift planning Electronics category Dubai Shopping Festival uplift percentage planning days"
+                    finds DSF event planning chunk
+
+                    Q3 "Electronics supplier pool chain expedite risk" 
+                    finds Electronics→TechLine→CP004 graph chunk
+            Returns: top 5 chunks → formatted context string → injected as {policy_context} into Agent 1 prompt
+
+    2. Agent 2: Supply Replenishment Agent. Needs: supplier SLA terms + expedite rules + option building rules
+                with Inputs: category="Electronics" supplier_name="TechLine Asia" lead_time_too_late=True abc_class="B" urgency="CRITICAL"
+                supplier policy graph ← searches these 3 doc types
+                forms query for knowledge base:
+                    Q1 "lead time expedite Electronics TechLine Asia lead_time_too_late expedite mandatory no expedite available"
+                    meaning : finds TechLine SLA + 19-day expedite chunk
+
+                    Q2: "Option A Option B Option C building rules Class B CRITICAL lead_time_too_late"
+                    finds option building rules chunk from policy
+
+            Returns: top 4 chunks → formatted context string → injected as {policy_context} into Agent 2 prompt
+
+    3. Agent 3: Capital Allocation Agent. Needs: pool rules + scoring formula + elimination logic
+                Inputs: category="Electronics" urgency="CRITICAL" abc_class="B" approval_pool="CP003"
+                policy graph ← searches only these 2 doc types
+                forms query for knowledge base:
+                    Q1 "CP003 pool pressure HIGH MEDIUM LOW auto approve limit approval threshold Electronics"
+                    finds CP003 pool rules chunk
+
+                    Q2 "budget score availability score margin score formula lead time penalty elimination rules Class B CRITICAL"
+                    finds Agent 3 scoring formula table chunk
+
+                    Q3 "scoring formula table Agent 3 capital allocation 0 100 points"
+                    finds the scoring formula TABLE specifically (element_type=table)
+            Returns: top 4 chunks including the scoring table → injected as {policy_context} into Agent 3 prompt
+
+    4. Agent 4: Exception Action Agent. Needs: HITL briefing format + contact resolution rule
+                Inputs: category="Electronics" supplier_name="TechLine Asia" route="ESCALATE"
+                supplier graph policy ← searches these 3 doc types
+                forms query for knowledge base:
+                    Q1 "HITL briefing format ESCALATE approval 48 hours supplier contact resolution Electronics TechLine Asia"
+                    finds briefing checklist + contact resolution rule chunks
+            Returns: top 3 chunks → injected as {policy_context} into Agent 4 prompt
+
+
+    For each agent's above queries:
+
+    _hybrid_retrieve — runs vector search + BM25, merges with RRF, returns top 10
+    _rerank — BGE reranker re-scores, returns top 3
+    _corrective_retry — only on q1: if score < 0.35, retry with domain-enriched query
+
+    then finally pass these context to the LLM...
+
+    """
     # ===========================================================================
  
     def query_for_agent1(
@@ -867,3 +977,161 @@ class ORCARetriever:
  
         chunks = self._rerank(q1, self._hybrid_retrieve(q1, doc_types, self.RETRIEVE_TOP_K))
         return self._format_context(chunks[:3], "briefing/policy")
+
+    '''
+
+    One of the example of the context been feed to LLM. below is one of the output of agent, it looks like:
+    Note there is priority rule attached , because in format_contect function. I have asked to add these string.
+    policy_context = """
+                    PRIORITY RULE: database wins over this context on any factual conflict.
+
+                    [Policy] | Section 1 - ABC Class Ordering Rules
+                    Class B SKU Rules: Minimum order follows supplier min_order_qty.
+                    Distribution to all affected stores unless HIGH pool pressure...
+
+                    ---
+
+                    [Event] | Section 1 - UAE Retail Event Calendar
+                    Dubai Shopping Festival: Electronics 90% uplift.
+                    TechLine Asia Electronics orders must be placed 80 days before January 15...
+
+                    ---
+
+                    [Graph] | Knowledge Graph: Category → Supplier → Pool Chains
+                    Electronics → TechLine Asia → CP004 (standard) → CP003 (expedite)
+                    Planning risk: Long lead time. Plan all events 80 days ahead...
+                    """
+
+    Please Note: graph.py calls methods of retriver as:
+
+    # inside agent1_node
+        policy_context = retriever.query_for_agent1(
+                                                    category           = "Electronics",
+                                                    abc_class          = "B",
+                                                    urgency            = "CRITICAL",
+                                                    lead_time_too_late = True,
+                                                    event_name         = "Dubai Shopping Festival",
+                                                )
+
+        then finally,
+
+        messages = PROMPTS["agent1"].format_messages(
+                                                        pipeline_id        = state["pipeline_id"],
+                                                        sku_id             = sku_id,
+                                                        affected_positions = json.dumps(positions_result),
+                                                        sku_context        = json.dumps(sku_result),
+                                                        velocity           = json.dumps(velocity_result),
+                                                        active_events      = json.dumps(events_result),
+                                                        policy_context     = policy_context,    # ← THIS is what retriever returns
+                                                    )
+
+
+    LLM receives the complete prompt:
+    ----------------------------------
+    LIVE DATA (from database via MCP):
+        stock=21, critical_stores=5, days_of_cover=0.7
+        effective_lead_time=54.5, allows_expedite=True
+
+    POLICY KNOWLEDGE (from RAG):
+        Class B ordering rules...
+        DSF Electronics: order 80 days ahead...
+        Electronics → TechLine Asia → CP003...
+
+    Now produce demand_summary JSON.
+    
+    One diagram showing all 4 agents:
+
+            AgentState flows through graph →
+
+            agent1_node
+                ← MCP: positions, sku, velocity, events    (FACTS)
+                ← retriever.query_for_agent1()             (RULES)
+                → LLM → demand_summary written to state
+
+            agent2_node
+                ← MCP: sku_data, supplier_data            (FACTS)
+                ← retriever.query_for_agent2()            (RULES)
+                → LLM → options_package written to state
+
+            agent3_node
+                ← MCP: cp001_data, cp003_data, sku_data   (FACTS)
+                ← retriever.query_for_agent3()            (RULES)
+                → LLM → capital_decision written to state
+
+            agent4_node (hitl_node)
+                ← MCP: supplier_data                      (FACTS)
+                ← retriever.query_for_agent4()            (RULES)
+                → LLM → hitl_briefing written to state
+
+    Every agent gets live facts from the database AND relevant rules from the knowledge base. Neither alone is enough. Together they make the LLM's reasoning complete 
+    and policy-compliant.
+    '''
+
+
+# ==============================================================================
+# SINGLETON
+# ==============================================================================
+ 
+'''
+Singleton is very imp. Backend concept. Look ORCARetriver is very expensive class to create because it loads:
+ChromaDB, embedding model, BM25 cache, BGE reranker
+These are: heavy resources, takes lot lot of memory.
+
+WITHOUT SINGLETON Suppose your app does:
+    r1 = ORCARetriever()
+    r2 = ORCARetriever()
+    r3 = ORCARetriever()
+
+It will be disaster, EACH object would: reload models, reconnect DB, allocate memory again. Memory explosion. Slow application.
+
+SINGLETON IDEA Singleton means: "Only ONE instance of this class, should exist in entire application.
+'''
+
+
+_instance: Optional[ORCARetriever] = None
+ 
+def get_retriever() -> ORCARetriever:
+    """Returns singleton retriever. Initialises on first call."""
+    global _instance
+    if _instance is None:               # CONDITION CHECK, only if there is no instance then one is created else the running instance is returned.
+        _instance = ORCARetriever() 
+    return _instance
+ 
+ 
+# ==============================================================================
+# QUICK TEST
+# ==============================================================================
+ 
+if __name__ == "__main__":
+    print("\nORCA RAG Retriever — 2026 Stack Test\n")
+ 
+    r = get_retriever()
+ 
+    if not r.is_available():
+        print("ChromaDB not available. Run: python rag/ingest.py first.")
+        import sys; sys.exit(1)
+ 
+    print(f"  Embedding model : {r._model_used}")
+    print(f"  BGE Reranker    : {r._reranker._model_name if r._reranker._available else 'unavailable (graceful degradation)'}")
+    print(f"  Collection      : {COLLECTION_NAME}")
+    print(f"  Chunks indexed  : {r._collection.count()}")
+    print()
+ 
+    print("Agent 1 — Electronics CRITICAL lead_time_too_late:")
+    ctx = r.query_for_agent1(
+        category="Electronics", abc_class="B",
+        urgency="CRITICAL", lead_time_too_late=True,
+        event_name="Dubai Shopping Festival",
+    )
+    print(ctx[:600])
+    print("...\n")
+ 
+    print("Agent 3 — Capital allocation scoring formula:")
+    ctx3 = r.query_for_agent3(
+        category="Electronics", urgency="CRITICAL",
+        abc_class="B", approval_pool="CP003",
+    )
+    print(ctx3[:600])
+    print("...\n")
+ 
+    print("All retriever tests complete.")

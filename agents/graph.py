@@ -115,6 +115,7 @@ from db.queries import (
     writeback_reorder_for_all_positions,
 )
 from db.pipeline_log import save_pipeline_run, create_pipeline_table
+from docs.rag.retriever import get_retriever
  
 logger = logging.getLogger("orca.graph")
 logging.basicConfig(
@@ -398,6 +399,28 @@ def agent1_node(state: AgentState) -> dict:
 
     # format prompt and call LLM
     llm      = get_llm()
+
+    # RAG — fetch policy context for Agent 1
+    # query_for_agent1 fires 3 targeted queries:
+    #   Q1 — ordering rules for this abc_class and urgency
+    #   Q2 — event planning rules for this category and event
+    #   Q3 — entity chain: category → supplier → pool
+    
+    demand_summary_so_far = {}  # not yet available — Agent 1 produces it
+
+    event_list  = events_result.get("events", [])
+    event_name  = event_list[0].get("event_name") if event_list else None
+    retriever   = get_retriever()
+    policy_context = retriever.query_for_agent1(
+        category           = sku_result.get("category", ""),
+        abc_class          = sku_result.get("abc_class", "B"),
+        urgency            = "HIGH",   # conservative default before LLM decides
+        lead_time_too_late = sku_result.get("effective_lead_time", 0) > 20,
+        event_name         = event_name,
+    )
+    logger.info(f"Agent 1 RAG context fetched | {len(policy_context)} chars")
+
+
     messages = PROMPTS["agent1"].format_messages(
         pipeline_id        = state["pipeline_id"],
         sku_id             = sku_id,
@@ -405,6 +428,7 @@ def agent1_node(state: AgentState) -> dict:
         sku_context        = json.dumps(sku_result, indent=2),
         velocity           = json.dumps(velocity_result, indent=2),
         active_events      = json.dumps(events_result.get("events", []), indent=2),
+        policy_context     = policy_context,
     )
     logger.info(
         f"Agent 1 calling LLM "
@@ -481,6 +505,25 @@ def agent2_node(state: AgentState) -> dict:
 
     # format prompt with state output from Agent 1 + fresh MCP data 
     llm = get_llm()
+
+    # RAG — fetch policy context for Agent 2
+    # query_for_agent2 fires 2 targeted queries:
+    #   Q1 — supplier SLA terms + expedite rules for this category/supplier
+    #   Q2 — option building rules for this abc_class and urgency
+
+    demand_summary = state.get("demand_summary", {})
+    retriever      = get_retriever()
+    policy_context = retriever.query_for_agent2(
+        category           = sku_data.get("category", ""),
+        supplier_name      = supplier_data.get("supplier_name", ""),
+        lead_time_too_late = demand_summary.get("lead_time_too_late", False),
+        abc_class          = sku_data.get("abc_class", "B"),
+        urgency            = demand_summary.get("urgency", "HIGH"),
+    )
+    logger.info(f"Agent 2 RAG context fetched | {len(policy_context)} chars")
+
+
+
     messages = PROMPTS["agent2"].format_messages(
         pipeline_id    = state["pipeline_id"],
         sku_id         = sku_id,
@@ -488,6 +531,7 @@ def agent2_node(state: AgentState) -> dict:
         sku_data       = json.dumps(sku_data, indent=2),
         supplier_data  = json.dumps(supplier_data, indent=2),
         tier1_stores   = json.dumps(tier1_stores, indent=2),
+        policy_context = policy_context,
     )
 
     logger.info(
@@ -549,6 +593,28 @@ def agent3_node(state: AgentState) -> dict:
 
     # format prompt and call LLM
     llm      = get_llm()
+
+    # RAG — fetch policy context for Agent 3
+    # query_for_agent3 fires 3 targeted queries:
+    #   Q1 — pool rules and approval thresholds for this pool
+    #   Q2 — scoring formula and elimination rules
+    #   Q3 — scoring formula TABLE specifically (element_type=table)
+
+    demand_summary   = state.get("demand_summary", {})
+    options_package  = state.get("options_package", {})
+    approval_pool    = options_package.get("options", [{}])[0].get("pool_id", "CP001")
+    retriever        = get_retriever()
+    policy_context   = retriever.query_for_agent3(
+        category       = sku_data.get("category", ""),
+        urgency        = demand_summary.get("urgency", "HIGH"),
+        abc_class      = sku_data.get("abc_class", "B"),
+        approval_pool  = approval_pool,
+    )
+    logger.info(f"Agent 3 RAG context fetched | {len(policy_context)} chars")
+
+
+
+
     messages = PROMPTS["agent3"].format_messages(
         pipeline_id     = state["pipeline_id"],
         sku_id          = sku_id,
@@ -557,6 +623,7 @@ def agent3_node(state: AgentState) -> dict:
         sku_data        = json.dumps(sku_data, indent=2),
         cp001_data      = json.dumps(cp001_data, indent=2),
         cp003_data      = json.dumps(cp003_data, indent=2),
+        policy_context  = policy_context,
     )
  
     logger.info(
@@ -680,6 +747,21 @@ def hitl_node(state: AgentState) -> dict:
 
     # call LLM to generate briefing text
     llm = get_llm()
+
+    # RAG — fetch policy context for Agent 4
+    # query_for_agent4 fires 1 targeted query:
+    #   Q1 — HITL briefing format + contact resolution rule
+    capital_decision = state.get("capital_decision", {})
+    retriever        = get_retriever()
+    policy_context   = retriever.query_for_agent4(
+        category      = state.get("demand_summary", {}).get("category", ""),
+        supplier_name = supplier_data.get("supplier_name", ""),
+        route         = "ESCALATE",
+    )
+    logger.info(f"Agent 4 RAG context fetched | {len(policy_context)} chars")
+
+
+
     messages = PROMPTS["agent4"].format_messages(
         pipeline_id      = state["pipeline_id"],
         sku_id           = sku_id,
@@ -688,6 +770,7 @@ def hitl_node(state: AgentState) -> dict:
         options_package  = json.dumps(state.get("options_package",  {}), indent=2),
         capital_decision = json.dumps(state.get("capital_decision", {}), indent=2),
         supplier_data    = json.dumps(supplier_data, indent=2),
+        policy_context   = policy_context,
     )
 
     logger.info(
