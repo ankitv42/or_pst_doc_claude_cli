@@ -116,6 +116,10 @@ from db.queries import (
 )
 from db.pipeline_log import save_pipeline_run, create_pipeline_table
 from docs.rag.retriever import get_retriever
+
+# initialise RAG retriever once at module load — BGE model loads here
+# subsequent calls to get_retriever() return the cached instance
+_retriever = get_retriever()
  
 logger = logging.getLogger("orca.graph")
 logging.basicConfig(
@@ -123,6 +127,14 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%H:%M:%S"
 )
+
+from docs.rag.retriever import get_retriever
+logger.info("Initialising RAG retriever — BGE model loading...")
+_retriever = get_retriever()
+logger.info(f"RAG retriever ready | available={_retriever.is_available()}")
+
+
+
 
 # absolute path to MCP server — needed for subprocess launch
 MCP_SERVER_PATH = str(
@@ -410,7 +422,7 @@ def agent1_node(state: AgentState) -> dict:
 
     event_list  = events_result.get("events", [])
     event_name  = event_list[0].get("event_name") if event_list else None
-    retriever   = get_retriever()
+    retriever   = _retriever
     policy_context = retriever.query_for_agent1(
         category           = sku_result.get("category", ""),
         abc_class          = sku_result.get("abc_class", "B"),
@@ -512,7 +524,7 @@ def agent2_node(state: AgentState) -> dict:
     #   Q2 — option building rules for this abc_class and urgency
 
     demand_summary = state.get("demand_summary", {})
-    retriever      = get_retriever()
+    retriever   = _retriever
     policy_context = retriever.query_for_agent2(
         category           = sku_data.get("category", ""),
         supplier_name      = supplier_data.get("supplier_name", ""),
@@ -603,7 +615,7 @@ def agent3_node(state: AgentState) -> dict:
     demand_summary   = state.get("demand_summary", {})
     options_package  = state.get("options_package", {})
     approval_pool    = options_package.get("options", [{}])[0].get("pool_id", "CP001")
-    retriever        = get_retriever()
+    retriever   = _retriever
     policy_context   = retriever.query_for_agent3(
         category       = sku_data.get("category", ""),
         urgency        = demand_summary.get("urgency", "HIGH"),
@@ -752,7 +764,7 @@ def hitl_node(state: AgentState) -> dict:
     # query_for_agent4 fires 1 targeted query:
     #   Q1 — HITL briefing format + contact resolution rule
     capital_decision = state.get("capital_decision", {})
-    retriever        = get_retriever()
+    retriever   = _retriever
     policy_context   = retriever.query_for_agent4(
         category      = state.get("demand_summary", {}).get("category", ""),
         supplier_name = supplier_data.get("supplier_name", ""),
