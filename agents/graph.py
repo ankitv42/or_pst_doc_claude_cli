@@ -91,13 +91,15 @@ Usage:
     state = run_pipeline(sku_id="SKU00090", store_id="STR0077")
 """
 import sys
+sys.path.insert(0, r"C:/lit")
+import sys
 import json
 import asyncio
 import logging
 from pathlib import Path
 from datetime import date
 from typing import TypedDict, Optional
- 
+
 sys.path.append(str(Path(__file__).parent.parent))
  
 from dotenv import load_dotenv
@@ -116,11 +118,8 @@ from db.queries import (
 )
 from db.pipeline_log import save_pipeline_run, create_pipeline_table
 from docs.rag.retriever import get_retriever
+from agents.crew import run_forecast_crew
 
-# initialise RAG retriever once at module load — BGE model loads here
-# subsequent calls to get_retriever() return the cached instance
-_retriever = get_retriever()
- 
 logger = logging.getLogger("orca.graph")
 logging.basicConfig(
     level=logging.INFO,
@@ -128,12 +127,12 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 
-from docs.rag.retriever import get_retriever
+# initialise RAG retriever once at module load — BGE model loads here
+# subsequent calls to get_retriever() return the cached instance
+
 logger.info("Initialising RAG retriever — BGE model loading...")
 _retriever = get_retriever()
 logger.info(f"RAG retriever ready | available={_retriever.is_available()}")
-
-
 
 
 # absolute path to MCP server — needed for subprocess launch
@@ -356,6 +355,7 @@ def _parse_json(text: str, agent_name: str) -> dict:
     """
     Safely parses LLM JSON output.
     Strips markdown code fences if the LLM wraps output in ```json blocks.
+    On failure — retries by asking LLM to fix the JSON.
     """
     clean = text.strip()
     if clean.startswith("```"):
@@ -366,9 +366,30 @@ def _parse_json(text: str, agent_name: str) -> dict:
     try:
         return json.loads(clean)
     except json.JSONDecodeError as e:
-        logger.error(f"{agent_name} JSON parse failed: {e}")
-        logger.error(f"Raw output:\n{text[:500]}")
-        raise ValueError(f"{agent_name} returned invalid JSON: {e}")
+        logger.warning(f"{agent_name} JSON parse failed: {e} — attempting LLM self-fix")
+        # ask LLM to fix its own output
+        fix_prompt = (
+            f"The following JSON is invalid because it contains formulas instead of numbers.\n"
+            f"Fix it by computing all formulas and replacing with actual numbers.\n"
+            f"Return ONLY valid JSON, no explanation.\n\n"
+            f"{clean}"
+        )
+        try:
+            llm      = get_llm()
+            response = llm.invoke([{"role": "user", "content": fix_prompt}])
+            fixed    = response.content.strip()
+            if fixed.startswith("```"):
+                lines = fixed.split("\n")
+                fixed = "\n".join(
+                    lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+                ).strip()
+            result = json.loads(fixed)
+            logger.info(f"{agent_name} JSON self-fix succeeded")
+            return result
+        except Exception as e2:
+            logger.error(f"{agent_name} JSON parse failed: {e}")
+            logger.error(f"Raw output:\n{text[:500]}")
+            raise ValueError(f"{agent_name} returned invalid JSON: {e}")
     
 
 # ==============================================================================
@@ -432,7 +453,7 @@ def agent1_node(state: AgentState) -> dict:
     )
     logger.info(f"Agent 1 RAG context fetched | {len(policy_context)} chars")
 
-
+    '''
     messages = PROMPTS["agent1"].format_messages(
         pipeline_id        = state["pipeline_id"],
         sku_id             = sku_id,
@@ -449,6 +470,45 @@ def agent1_node(state: AgentState) -> dict:
     response = llm.invoke(messages)
 
     demand_summary = _parse_json(response.content, "Agent 1")
+    '''
+
+    # CREWAI FORECASTING CREW
+    # Replaces single LLM call with 3-agent collaborative crew.
+    # Data Analyst + Market Analyst → Forecast Strategist.
+    # Falls back to single LLM if crew fails.
+    logger.info("Agent 1 launching CrewAI forecasting crew...")
+    try:
+        demand_summary = run_forecast_crew(
+            sku_id           = sku_id,
+            positions_result = positions_result,
+            sku_result       = sku_result,
+            velocity_result  = velocity_result,
+            events_result    = events_result,
+        )
+        logger.info(
+            f"CrewAI forecast complete | "
+            f"urgency={demand_summary.get('urgency')} | "
+            f"confidence={demand_summary.get('confidence_score')} | "
+            f"trend={demand_summary.get('demand_trend')}"
+        )
+    except Exception as e:
+        # graceful fallback to single LLM if crew fails
+        logger.warning(f"CrewAI failed ({e}) — falling back to single LLM call")
+        messages = PROMPTS["agent1"].format_messages(
+            pipeline_id        = state["pipeline_id"],
+            sku_id             = sku_id,
+            affected_positions = json.dumps(positions_result.get("positions", []), indent=2),
+            sku_context        = json.dumps(sku_result, indent=2),
+            velocity           = json.dumps(velocity_result, indent=2),
+            active_events      = json.dumps(events_result.get("events", []), indent=2),
+            policy_context     = policy_context,
+        )
+        response       = llm.invoke(messages)
+        demand_summary = _parse_json(response.content, "Agent 1")
+
+
+
+
 
     logger.info(
         f"Agent 1 complete | "
@@ -1247,6 +1307,23 @@ if __name__ == "__main__":
     print("-" * 60)
  
     final_state = run_pipeline(sku_id=sku_id, store_id=store_id)
+
+    # If AUTO_EXECUTE — resume immediately (no human needed)
+    # In Sprint 4 FastAPI does this automatically
+    # For now we do it here in the test block
+    route      = final_state.get("route", "")
+    pipeline_id_run = f"PIPE_{sku_id}_{date.today().strftime('%Y-%m-%d')}"
+    if route == "AUTO_EXECUTE":
+        print("\n" + "-" * 60)
+        print("AUTO_EXECUTE — resuming pipeline immediately (no human needed)")
+        print("-" * 60)
+        final_state = resume_pipeline(pipeline_id_run, approved=True)
+    elif route == "ESCALATE":
+        print("\n" + "-" * 60)
+        print("ESCALATE — pipeline paused. Human approval required.")
+        print(f"Call: resume_pipeline('{pipeline_id_run}', approved=True) to approve")
+        print("-" * 60)
+
 
     print("\n" + "=" * 60)
     print("PIPELINE RESULT")
