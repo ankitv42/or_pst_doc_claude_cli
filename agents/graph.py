@@ -92,7 +92,6 @@ Usage:
 """
 import sys
 sys.path.insert(0, r"C:/lit")
-import sys
 import json
 import asyncio
 import logging
@@ -131,8 +130,12 @@ logging.basicConfig(
 # subsequent calls to get_retriever() return the cached instance
 
 logger.info("Initialising RAG retriever — BGE model loading...")
-_retriever = get_retriever()
-logger.info(f"RAG retriever ready | available={_retriever.is_available()}")
+try:
+    _retriever = get_retriever()
+    logger.info(f"RAG retriever ready | available={_retriever.is_available()}")
+except Exception as e:
+    logger.warning(f"RAG retriever unavailable ({e}) — agents will use LLM knowledge only")
+    _retriever = None
 
 
 # absolute path to MCP server — needed for subprocess launch
@@ -444,6 +447,10 @@ def agent1_node(state: AgentState) -> dict:
     event_list  = events_result.get("events", [])
     event_name  = event_list[0].get("event_name") if event_list else None
     retriever   = _retriever
+    if retriever and retriever.is_available():
+        policy_context = retriever.query_for_agent1(...)
+    else:
+        policy_context = "Knowledge base unavailable — using LLM knowledge."
     policy_context = retriever.query_for_agent1(
         category           = sku_result.get("category", ""),
         abc_class          = sku_result.get("abc_class", "B"),
@@ -585,6 +592,10 @@ def agent2_node(state: AgentState) -> dict:
 
     demand_summary = state.get("demand_summary", {})
     retriever   = _retriever
+    if retriever and retriever.is_available():
+        policy_context = retriever.query_for_agent1(...)
+    else:
+        policy_context = "Knowledge base unavailable — using LLM knowledge."
     policy_context = retriever.query_for_agent2(
         category           = sku_data.get("category", ""),
         supplier_name      = supplier_data.get("supplier_name", ""),
@@ -676,6 +687,10 @@ def agent3_node(state: AgentState) -> dict:
     options_package  = state.get("options_package", {})
     approval_pool    = options_package.get("options", [{}])[0].get("pool_id", "CP001")
     retriever   = _retriever
+    if retriever and retriever.is_available():
+        policy_context = retriever.query_for_agent1(...)
+    else:
+        policy_context = "Knowledge base unavailable — using LLM knowledge."
     policy_context   = retriever.query_for_agent3(
         category       = sku_data.get("category", ""),
         urgency        = demand_summary.get("urgency", "HIGH"),
@@ -825,6 +840,10 @@ def hitl_node(state: AgentState) -> dict:
     #   Q1 — HITL briefing format + contact resolution rule
     capital_decision = state.get("capital_decision", {})
     retriever   = _retriever
+    if retriever and retriever.is_available():
+        policy_context = retriever.query_for_agent1(...)
+    else:
+        policy_context = "Knowledge base unavailable — using LLM knowledge."
     policy_context   = retriever.query_for_agent4(
         category      = state.get("demand_summary", {}).get("category", ""),
         supplier_name = supplier_data.get("supplier_name", ""),

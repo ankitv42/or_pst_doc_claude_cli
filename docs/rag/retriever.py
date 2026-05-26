@@ -553,6 +553,8 @@ class ORCARetriever:
             )
             self._reranker = BGEReranker()                              # Loads cross-encoder reranker.
         except Exception as e:
+            import logging
+            logging.getLogger("orca.retriever").error(f"RAG init failed: {type(e).__name__}: {e}")
             self._collection = None                                     
  
     def is_available(self) -> bool:
