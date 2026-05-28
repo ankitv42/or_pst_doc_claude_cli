@@ -1,0 +1,8 @@
+open one terminal
+------------------
+uvicorn api.main:app --reload --port 8080
+
+
+open another terminal
+---------------------
+streamlit run dashboard/app.py
