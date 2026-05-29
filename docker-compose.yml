@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────
+# ORCA — docker-compose.yml
+# Runs both API and Dashboard containers together
+#
+# Usage:
+#   docker-compose up --build    ← build images and start
+#   docker-compose up            ← start (if already built)
+#   docker-compose down          ← stop everything
+#   docker-compose logs api      ← view API logs
+#   docker-compose logs dashboard ← view Dashboard logs
+#
+# WHY docker-compose:
+#   API and Dashboard are two separate containers
+#   They need to talk to each other
+#   docker-compose handles networking between them automatically
+#   One command starts the entire system
+# ─────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+
+  # ── FastAPI service ───────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: orca-api
+    ports:
+      - "8080:8080"        # host:container
+    env_file:
+      - .env               # loads GROQ_API_KEY etc at runtime
+                           # .env is NOT baked into image — injected here
+    volumes:
+      - ./db:/app/db       # persist SQLite DB outside container
+                           # without this, DB resets every restart
+      - ./db/chroma:/app/db/chroma  # persist ChromaDB vectors
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped   # auto-restart if container crashes
+
+  # ── Streamlit Dashboard service ───────────────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: orca-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      # Tell dashboard where to find the API
+      # Inside Docker network, containers talk by service name not localhost
+      # "api" = the service name above, port 8080
+      - API_BASE_URL=http://api:8080
+    depends_on:
+      - api
+    restart: unless-stopped
+
+# ── Named volumes ─────────────────────────────────────────────────
+volumes:
+  db_data:
+
+# ── Network ───────────────────────────────────────────────────────
+# Docker creates a default network for this compose file
+# Both containers are on it — they can reach each other by service name
+networks:
+  default:
+    name: orca-network

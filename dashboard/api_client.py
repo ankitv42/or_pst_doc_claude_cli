@@ -18,7 +18,7 @@ ALL methods:
     - Log errors to console — never crash the Streamlit app
     - Timeout after 120s — pipelines can run for 90s
 """
-
+import os
 import httpx
 import logging
 import streamlit as st
@@ -26,7 +26,8 @@ import streamlit as st
 logger = logging.getLogger("orca.dashboard")
 
 # API base URL — matches uvicorn port
-BASE_URL = "http://localhost:8080"
+# BASE_URL = "http://localhost:8080"
+BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8080")
 TIMEOUT  = 120.0   # seconds — must be > max pipeline runtime
 
 

@@ -118,7 +118,7 @@ class ReplenishmentOption(BaseModel):
     """Single option (A, B, or C) inside options_package."""
     id:                str
     name:              Optional[str]   = None
-    order_qty:         Optional[int]   = None
+    order_qty:         Optional[float]   = None
     lead_time_days:    Optional[float] = None
     total_cost_aed:    Optional[float] = None
     pool_id:           Optional[str]   = None

@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────
+# .dockerignore — files NOT copied into Docker image
+#
+# Like .gitignore but for Docker.
+# Keeps image lean and prevents secrets leaking into image.
+# ─────────────────────────────────────────────────────────────────
+
+# Virtual environment — huge, not needed (pip install handles this)
+venv/
+.venv/
+env/
+
+# Secrets — NEVER in image
+.env
+.env.*
+
+# Python cache — not needed
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Git history — not needed in container
+.git/
+.gitignore
+
+# VS Code settings
+.vscode/
+
+# Test files
+tests/
+*.test.py
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# ChromaDB — rebuilt on first run or mounted via volume
+db/chroma/
+
+# Large model files — downloaded at runtime
+*.bin
+*.safetensors
+
+# Node modules (if any frontend)
+node_modules/
