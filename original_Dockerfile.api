@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────────
+# ORCA — Dockerfile.api
+# Builds the FastAPI container
+#
+# WHY python:3.11-slim:
+#   slim = minimal Debian base — no unnecessary packages
+#   keeps image small (~150MB vs ~900MB for full python image)
+#   production standard — only what we need
+#
+# Build:  docker build -f Dockerfile.api -t orca-api .
+# Run:    docker run --env-file .env -p 8080:8080 orca-api
+# ─────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+# Set working directory inside container
+WORKDIR /app
+
+# Install system dependencies needed by some Python packages
+# chromadb and sentence-transformers need these
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first — Docker layer caching
+# If requirements.txt hasn't changed, Docker skips pip install on rebuild
+# This makes rebuilds fast when you only change code
+COPY requirements.txt .
+
+# Install Python dependencies
+# --no-cache-dir keeps image lean
+# litellm installs normally on Linux — no C:/lit workaround needed
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all project code
+COPY . .
+
+# Create db directory — SQLite database lives here
+RUN mkdir -p db
+
+# Expose the API port
+EXPOSE 8080
+
+# Health check — Docker monitors this
+# If /health returns non-200, Docker restarts the container
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start the FastAPI server
+# --host 0.0.0.0 = listen on all interfaces (required in container)
+# --port 8080 = match EXPOSE above
+# workers=1 for Render free tier (limited RAM)
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
