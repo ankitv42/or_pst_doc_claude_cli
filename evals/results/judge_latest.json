@@ -1,0 +1,123 @@
+{
+  "layer": "judge",
+  "judge_model": "llama-3.3-70b-versatile",
+  "runs_graded": 5,
+  "criteria_avgs": {
+    "consistency": 1.8,
+    "hitl_accuracy": 5.0,
+    "scoring_accuracy": 3.4,
+    "classa_safety": 1.8
+  },
+  "runs": [
+    {
+      "sku_id": "SKU00078",
+      "final_status": "AUTO_EXECUTED",
+      "scores": {
+        "consistency": {
+          "score": 1,
+          "reason": "The human briefing names Option B with a cost of 6,953 AED, but the recommended option in the CAPITAL DECISION is also Option B with the same cost, however the OPTIONS PACKAGE recommends Option C, which is inconsistent with the scored decision and the human briefing."
+        },
+        "hitl_accuracy": {
+          "score": 5,
+          "reason": "The final status is AUTO_EXECUTED and the cost of Option B is 6,953 AED, which is below the auto-approve limit, so human approval was not triggered and the decision matches the cost-vs-limit rule."
+        },
+        "scoring_accuracy": {
+          "score": 3,
+          "reason": "The margin_score for all options is incorrect, as the formula (1 / margin_priority_rank) * 20 is not applied, and the provided margin_score values do not match the expected calculation."
+        },
+        "classa_safety": {
+          "score": 1,
+          "reason": "Option B was chosen for SKU00078, which is a Class A SKU that requires full distribution, but Option B only serves 2 stores."
+        }
+      }
+    },
+    {
+      "sku_id": "SKU00033",
+      "final_status": "AUTO_EXECUTED",
+      "scores": {
+        "consistency": {
+          "score": 1,
+          "reason": "The human briefing names a different supplier and does not match the recommended option's supplier in the CAPITAL DECISION, and also the supplier in the briefing does not match the supplier in option B of the OPTIONS PACKAGE."
+        },
+        "hitl_accuracy": {
+          "score": 5,
+          "reason": "The final status is AUTO_EXECUTED and the cost of AED 25,815 is below the auto-approve limit, so human approval was not triggered, matching the cost-vs-limit rule perfectly."
+        },
+        "scoring_accuracy": {
+          "score": 3,
+          "reason": "The budget_score for option A is incorrect, it should be calculated as (1 - 43424.82 / 4000000) * 40, which equals approximately 39.57, not 36.0."
+        },
+        "classa_safety": {
+          "score": 1,
+          "reason": "Option B was chosen for SKU00033, which is a Class A SKU that requires full distribution, but Option B only serves 3 stores with 60% availability."
+        }
+      }
+    },
+    {
+      "sku_id": "SKU00081",
+      "final_status": "AUTO_EXECUTED",
+      "scores": {
+        "consistency": {
+          "score": 1,
+          "reason": "The human briefing names a different supplier and cost than the scored decision, with the briefing mentioning \"Li Ming \u2014 li@techline.cn\" as the supplier, which corresponds to option C, not the recommended option B."
+        },
+        "hitl_accuracy": {
+          "score": 5,
+          "reason": "The final status is AUTO_EXECUTED and the cost of Option B is below the auto-approve limit, indicating that human approval was not triggered and the decision aligns with the cost-vs-limit rule."
+        },
+        "scoring_accuracy": {
+          "score": 5,
+          "reason": "The scored options provided by Agent 3 accurately reflect the application of the scoring formula, with all components correctly calculated for each option."
+        },
+        "classa_safety": {
+          "score": 1,
+          "reason": "Option B was chosen for SKU00081, which is a Class A SKU that requires full distribution, but Option B only serves 2 stores."
+        }
+      }
+    },
+    {
+      "sku_id": "SKU00010",
+      "final_status": "AUTO_EXECUTED",
+      "scores": {
+        "consistency": {
+          "score": 1,
+          "reason": "The human briefing names Option B with a cost of 6,951 AED, but the recommended option in the CAPITAL DECISION is also Option B, which is consistent, however the briefing also mentions the supplier as Tariq Al Ghamdi, which is associated with Option C in the OPTIONS PACKAGE, indicating a mismatch."
+        },
+        "hitl_accuracy": {
+          "score": 5,
+          "reason": "The final status is AUTO_EXECUTED and the cost of Option B is 6,951 AED, which is below the auto-approve limit, matching the expected behavior for human approval triggering."
+        },
+        "scoring_accuracy": {
+          "score": 3,
+          "reason": "The budget_score for option B is incorrect, as it should be calculated as (1 - 6951.2 / 2500000) * 40, which equals approximately 39.0, not 64.0."
+        },
+        "classa_safety": {
+          "score": 1,
+          "reason": "Option B was chosen for SKU00010, which is a Class A SKU that requires full distribution, but Option B only serves 2 stores."
+        }
+      }
+    },
+    {
+      "sku_id": "SKU00061",
+      "final_status": "ESCALATED",
+      "scores": {
+        "consistency": {
+          "score": 5,
+          "reason": "The scored decision, chosen winning option, cost, and human briefing all agree with each other, with Option A - Standard Replenishment being the recommended choice at a cost of AED 45951.48 from CP001."
+        },
+        "hitl_accuracy": {
+          "score": 5,
+          "reason": "The final status is ESCALATED and approval_required is TRUE, indicating that human approval was triggered exactly when the cost exceeded the pool auto-approve limit."
+        },
+        "scoring_accuracy": {
+          "score": 3,
+          "reason": "Agent 3's calculation of the budget score and other components appears to be mostly correct, but the margin score calculation seems to be off as the margin_priority_rank is not provided in the given data, making it difficult to verify its correctness."
+        },
+        "classa_safety": {
+          "score": 5,
+          "reason": "The recommended option for SKU00061, which is a Class A SKU, is Option A, not Option B, ensuring that Class A safety criteria are met by never using Option B for full distribution."
+        }
+      }
+    }
+  ]
+}

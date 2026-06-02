@@ -1,0 +1,17 @@
+{
+  "components": {
+    "retrieval_pass_rate": 0.75,
+    "context_recall": 0.667,
+    "faithfulness": 0.667,
+    "answer_relevance": 0.833
+  },
+  "weights": {
+    "retrieval_pass_rate": 0.4,
+    "context_recall": 0.3,
+    "faithfulness": 0.2,
+    "answer_relevance": 0.1
+  },
+  "composite": 0.717,
+  "threshold": 0.75,
+  "gate_pass": false
+}
