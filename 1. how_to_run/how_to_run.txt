@@ -16,6 +16,7 @@ ________________________________________
    pip install chromadb
    pip install langgraph
    pip install crewai
+   pip install ragas
 
 6. do few corrections (due to liteLLM not install in office pc)
 
