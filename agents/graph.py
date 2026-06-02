@@ -91,7 +91,7 @@ Usage:
     state = run_pipeline(sku_id="SKU00090", store_id="STR0077")
 """
 import sys
-sys.path.insert(0, r"C:/lit")
+sys.path.append(r"C:/lit")
 import json
 import asyncio
 import logging

@@ -558,6 +558,10 @@ class ORCARetriever:
             self._collection = None                                     
  
     def is_available(self) -> bool:
+        # Self-healing: if init failed earlier (e.g. model not ready during
+        # FastAPI import chain), retry once now that everything is loaded.
+        if self._collection is None:
+            self._init()
         return self._collection is not None
  
     # ── BM25 INDEX (built per doc_type set, cached) ────────────────────────

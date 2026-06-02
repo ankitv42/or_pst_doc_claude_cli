@@ -1,8 +1,69 @@
-open one terminal
-------------------
-uvicorn api.main:app --reload --port 8080
+________________________________________
+
+1. python -m venv venv
+
+2. venv/Scripts/activate
+
+3. create .env file
+
+4. pip install -r requirements.txt
+
+4a. if LiteLLM is failing from requirements.txt then (pip install litellm --target C:\lit)
+
+5. pip install langgraph langchain langchain-core langchain-groq langchain-mcp-adapters langchain-text-splitters langsmith crewai chromadb mcp groq litellm fastapi uvicorn starlette sse-starlette python-multipart pydantic pydantic-settings chromadb sentence-transformers FlagEmbedding python-dotenv httpx httpx-sse anyio SQLAlchemy aiosqlite pandas numpy requests tenacity rich PyYAML reportlab
+   pip install docling
+   pip install sentence-transformers --upgrade
+   pip install chromadb
+   pip install langgraph
+   pip install crewai
+
+6. do few corrections (due to liteLLM not install in office pc)
+
+Fix 1 — agents/graph.py (line ~94)
+    python
+    # BEFORE
+    sys.path.insert(0, r"C:/lit")
+
+    # AFTER
+    sys.path.append(r"C:/lit")
+
+Fix 2 — api/main.py (line ~75)
+    python
+    # BEFORE
+    sys.path.insert(0, r"C:/lit")   # litellm short-path — Windows workaround
+
+    # AFTER
+    sys.path.append(r"C:/lit")      # litellm short-path — Windows workaround
+    Why: insert(0, ...) = C:/lit wins = broken. append(...) = venv wins = fixed. This is the actual fix.
+
+Fix 3 — docs/rag/retriever.py (is_available method, ~line 560)
+    python
+    # BEFORE
+    def is_available(self) -> bool:
+    return self._collection is not None
+
+    # AFTER
+    def is_available(self) -> bool:
+        # Self-healing: if init failed earlier (e.g. model not ready during
+        # FastAPI import chain), retry once now that everything is loaded.
+        if self._collection is None:
+            self._init()
+        return self._collection is not None
+    Why: Defensive safety net — if init ever fails at startup, retries on first check. Keep it, but Fix 1+2 were the real cure.
 
 
-open another terminal
----------------------
-streamlit run dashboard/app.py
+7. rebuit chromadb from pdfs as it was in dcokerignore--> # from your repo root 
+    Remove-Item -Recurse -Force db\chroma
+    python docs/rag/ingest.py --reset
+
+8. however no steps needed for orca.db ( it will automatically created with pipeline run)
+
+
+9. open one terminal
+    ------------------
+    uvicorn api.main:app --reload --port 8080
+
+10. open another terminal
+    ---------------------
+    streamlit run dashboard/app.py
+

@@ -72,7 +72,7 @@ FastAPI Event Loop (asyncio)          ← handles 1000s of concurrent requests
                       └── run_pipeline() → CrewAI → MCP → LLM → DB
 """
 import sys
-sys.path.insert(0, r"C:/lit")   # litellm short-path — Windows workaround
+sys.path.append(r"C:/lit")   # litellm short-path — Windows workaround
 
 import json
 import logging
