@@ -1,17 +1,16 @@
 name: ORCA Eval Gate
 
-# Layer 3 — runs the retrieval eval automatically on every push/PR to main.
-# Only the retrieval eval runs in CI (it is free and needs no API key).
-# The RAGAS-style and judge evals need a GROQ_API_KEY; enable them by adding
-# the key as a GitHub secret and uncommenting the step below.
+# Layer 3 — runs the retrieval eval on every push/PR to main.
+# It uses the PRE-BUILT ChromaDB index committed at db/chroma (no ingest in CI),
+# so CI stays fast and needs no heavy parsing libraries (docling, einops, etc.).
 
 on:
   push:
     branches: [ main ]
-    paths: [ 'docs/**', 'agents/**', 'evals/**' ]
+    paths: [ 'docs/**', 'agents/**', 'evals/**', 'db/chroma/**' ]
   pull_request:
     branches: [ main ]
-    paths: [ 'docs/**', 'agents/**', 'evals/**' ]
+    paths: [ 'docs/**', 'agents/**', 'evals/**', 'db/chroma/**' ]
   workflow_dispatch:
 
 jobs:
@@ -26,32 +25,15 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install eval dependencies
         run: |
           pip install --upgrade pip
-          pip install chromadb sentence-transformers rank-bm25 python-dotenv
+          pip install chromadb sentence-transformers rank-bm25 python-dotenv einops
 
-      - name: Build the RAG knowledge base
-        run: python docs/rag/ingest.py --reset
-        env:
-          PYTHONPATH: .
-
-      - name: Run retrieval eval (CI gate)
+      - name: Run retrieval eval (CI gate, uses pre-built index)
         run: python evals/run_retrieval_eval.py --ci
         env:
           PYTHONPATH: .
-
-      # ── optional: RAGAS-style + judge evals (need GROQ_API_KEY secret) ─────
-      # - name: Run RAGAS-style eval
-      #   run: python evals/run_ragas_eval.py --limit 3
-      #   env:
-      #     PYTHONPATH: .
-      #     GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      #
-      # - name: Composite score gate
-      #   run: python evals/composite_score.py --ci
-      #   env:
-      #     PYTHONPATH: .
 
       - name: Upload results
         if: always()

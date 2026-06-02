@@ -1,0 +1,158 @@
+{
+  "layer": "retrieval",
+  "timestamp": "2026-06-02T16:18:49.172219",
+  "pass_rate": 0.75,
+  "avg_coverage": 0.778,
+  "keyword_leaks": 0,
+  "total_cases": 12,
+  "passed": 9,
+  "cases": [
+    {
+      "id": "A2-HINDUSTAN-NOEXP",
+      "agent": "agent2",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "No expedite",
+        "escalate",
+        "Hindustan FMCG"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A3-CP003-SCORING",
+      "agent": "agent3",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "CP003",
+        "20,000",
+        "budget_score",
+        "availability_score"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A1-RAMADAN-CLASSA",
+      "agent": "agent1",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "Ramadan",
+        "180%",
+        "NEVER"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A1-BACK-TO-SCHOOL",
+      "agent": "agent1",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "Back to School",
+        "Electronics"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A1-CLASSC-RULES",
+      "agent": "agent1",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "C (Low Value)",
+        "Ordering Rules"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A2-OPTION-RULES",
+      "agent": "agent2",
+      "passed": false,
+      "coverage": 0.0,
+      "found": [],
+      "missing": [
+        "Option Building",
+        "Standard Replenishment"
+      ],
+      "leaked": []
+    },
+    {
+      "id": "A2-CLASSA-NO-OPTIONB",
+      "agent": "agent2",
+      "passed": false,
+      "coverage": 0.0,
+      "found": [],
+      "missing": [
+        "Not for Class A"
+      ],
+      "leaked": []
+    },
+    {
+      "id": "A3-ROUTING-RULES",
+      "agent": "agent3",
+      "passed": false,
+      "coverage": 0.333,
+      "found": [
+        "AUTO_EXECUTE"
+      ],
+      "missing": [
+        "ESCALATE",
+        "SUSPEND"
+      ],
+      "leaked": []
+    },
+    {
+      "id": "A3-CP001-POOL",
+      "agent": "agent3",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "CP001",
+        "50,000"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A3-PENALTY-RULE",
+      "agent": "agent3",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "Penalty",
+        "CRITICAL"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A4-ESCALATE-BRIEF",
+      "agent": "agent4",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "ESCALATE"
+      ],
+      "missing": [],
+      "leaked": []
+    },
+    {
+      "id": "A4-CONTACT-RULE",
+      "agent": "agent4",
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "contact"
+      ],
+      "missing": [],
+      "leaked": []
+    }
+  ]
+}

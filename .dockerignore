@@ -41,7 +41,7 @@ logs/
 Thumbs.db
 
 # ChromaDB — rebuilt on first run or mounted via volume
-db/chroma/
+#db/chroma/
 
 # Large model files — downloaded at runtime
 *.bin
