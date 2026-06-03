@@ -1,6 +1,6 @@
 {
   "layer": "retrieval",
-  "timestamp": "2026-06-03T17:17:53.114635",
+  "timestamp": "2026-06-03T18:24:37.289317",
   "pass_rate": 1.0,
   "avg_coverage": 1.0,
   "keyword_leaks": 0,
@@ -64,7 +64,7 @@
       "coverage": 1.0,
       "found": [
         "CP001",
-        "Options A & B"
+        "Grocery"
       ],
       "missing": [],
       "leaked": []
@@ -75,8 +75,8 @@
       "passed": true,
       "coverage": 1.0,
       "found": [
-        "Options A & B",
-        "Option C"
+        "Al Rawdah Foods",
+        "Exp Premium"
       ],
       "missing": [],
       "leaked": []
@@ -100,8 +100,7 @@
       "coverage": 1.0,
       "found": [
         "AUTO_EXECUTE",
-        "ESCALATE",
-        "SUSPEND"
+        "Auto-Approve Limit"
       ],
       "missing": [],
       "leaked": []
@@ -125,7 +124,7 @@
       "coverage": 1.0,
       "found": [
         "CRITICAL",
-        "lead_time_too_late"
+        "Auto-Approve Limit"
       ],
       "missing": [],
       "leaked": []

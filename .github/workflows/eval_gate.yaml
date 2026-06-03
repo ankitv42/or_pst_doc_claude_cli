@@ -28,7 +28,7 @@ jobs:
       - name: Install eval dependencies
         run: |
           pip install --upgrade pip
-          pip install chromadb sentence-transformers rank-bm25 python-dotenv einops
+          pip install "chromadb==1.1.1" "sentence-transformers==5.5.0" "rank-bm25==0.2.2" python-dotenv einops
 
       - name: Run retrieval eval (CI gate, uses pre-built index)
         run: python evals/run_retrieval_eval.py --ci
