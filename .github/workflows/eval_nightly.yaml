@@ -1,0 +1,44 @@
+name: ORCA Nightly Eval Suite
+
+# Full eval suite — RAGAS + LLM-judge + composite gate.
+# Requires GROQ_API_KEY set as a GitHub Actions repository secret.
+# Runs nightly at 2am UTC. Also triggerable manually.
+# Composite gate: >= 0.75 to pass.
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 2am UTC daily
+  workflow_dispatch:
+
+jobs:
+  full-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install eval dependencies
+        run: |
+          pip install --upgrade pip
+          pip install "chromadb==1.1.1" "sentence-transformers==5.5.0" "rank-bm25==0.2.2" \
+            python-dotenv einops langchain-groq langchain-core
+
+      - name: Full eval suite (retrieval + RAGAS + judge + composite)
+        run: python evals/eval_main.py --ragas-limit 3 --judge-limit 5 --ci
+        env:
+          PYTHONPATH: .
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama-3.1-8b-instant
+
+      - name: Upload all results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-results-${{ github.run_number }}
+          path: evals/results/
+          retention-days: 90

@@ -1,16 +1,15 @@
 name: ORCA Eval Gate
 
-# Layer 3 — runs the retrieval eval on every push/PR to main.
-# It uses the PRE-BUILT ChromaDB index committed at db/chroma (no ingest in CI),
-# so CI stays fast and needs no heavy parsing libraries (docling, einops, etc.).
+# PR gate — runs on every push/PR to main.
+# Layer 1 (retrieval, free) + composite score in retrieval-only mode.
+# No GROQ_API_KEY needed. Uses pre-built ChromaDB index (no re-ingest).
+# For the full suite (RAGAS + judge) see eval_nightly.yaml.
 
 on:
   push:
     branches: [ main ]
-    paths: [ 'docs/**', 'agents/**', 'evals/**', 'db/chroma/**' ]
   pull_request:
     branches: [ main ]
-    paths: [ 'docs/**', 'agents/**', 'evals/**', 'db/chroma/**' ]
   workflow_dispatch:
 
 jobs:
@@ -30,8 +29,13 @@ jobs:
           pip install --upgrade pip
           pip install "chromadb==1.1.1" "sentence-transformers==5.5.0" "rank-bm25==0.2.2" python-dotenv einops
 
-      - name: Run retrieval eval (CI gate, uses pre-built index)
+      - name: Layer 1 — retrieval eval (hard gate >= 70% pass rate, 0 leaks)
         run: python evals/run_retrieval_eval.py --ci
+        env:
+          PYTHONPATH: .
+
+      - name: Composite score — retrieval-only mode (no RAGAS needed)
+        run: python evals/composite_score.py --ci
         env:
           PYTHONPATH: .
 

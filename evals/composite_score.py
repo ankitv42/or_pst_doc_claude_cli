@@ -60,18 +60,33 @@ def main():
     print("  ORCA COMPOSITE EVAL SCORE")
     print("=" * 64)
 
-    if retrieval is None or ragas is None:
-        print("\n  Missing result files. Run these first:")
+    if retrieval is None:
+        print("\n  ERROR: retrieval_latest.json missing. Run first:")
         print("    python evals/run_retrieval_eval.py")
-        print("    python evals/run_ragas_eval.py")
         sys.exit(2)
 
-    # gather the component values
-    retrieval_pass = retrieval.get("pass_rate", 0.0)
-    ragas_avgs = ragas.get("averages", {})
-    context_recall = ragas_avgs.get("context_recall", 0.0)
-    faithfulness = ragas_avgs.get("faithfulness", 0.0)
-    answer_relevance = ragas_avgs.get("answer_relevance", 0.0)
+    ragas_available = ragas is not None
+
+    if not ragas_available:
+        print("\n  NOTE: ragas_latest.json not found — running in retrieval-only mode.")
+        print("  Composite will be computed from retrieval pass rate only (weighted 100%).")
+        print("  Run python evals/run_ragas_eval.py to include RAGAS metrics.")
+
+    # gather the component values — RAGAS metrics default to None when unavailable
+    retrieval_pass   = retrieval.get("pass_rate", 0.0)
+    ragas_avgs       = ragas.get("averages", {}) if ragas_available else {}
+    context_recall   = ragas_avgs.get("context_recall")
+    faithfulness     = ragas_avgs.get("faithfulness")
+    answer_relevance = ragas_avgs.get("answer_relevance")
+
+    # compute composite — skip components with no data, re-normalise weights
+    available = {"retrieval_pass_rate": retrieval_pass}
+    if context_recall   is not None: available["context_recall"]   = context_recall
+    if faithfulness     is not None: available["faithfulness"]     = faithfulness
+    if answer_relevance is not None: available["answer_relevance"] = answer_relevance
+
+    total_weight = sum(WEIGHTS[k] for k in available)
+    composite = sum(available[k] * WEIGHTS[k] / total_weight for k in available)
 
     components = {
         "retrieval_pass_rate": retrieval_pass,
@@ -81,12 +96,14 @@ def main():
     }
 
     print("\n  Component scores (and weights):")
-    composite = 0.0
     for name, weight in WEIGHTS.items():
         val = components[name]
-        contribution = val * weight
-        composite += contribution
-        print(f"    {name:<22} {val:.3f}  x {weight:.0%}  = {contribution:.3f}")
+        if val is None:
+            print(f"    {name:<22} N/A   (not run)")
+        else:
+            eff_weight = weight / total_weight
+            contribution = val * eff_weight
+            print(f"    {name:<22} {val:.3f}  x {eff_weight:.0%}  = {contribution:.3f}")
 
     print("\n  " + "-" * 40)
     print(f"  COMPOSITE SCORE: {composite:.3f}")
@@ -112,8 +129,9 @@ def main():
     out = RESULTS_DIR / "composite_latest.json"
     with open(out, "w") as f:
         json.dump({
-            "components": components,
+            "components": {k: v for k, v in components.items()},
             "weights": WEIGHTS,
+            "ragas_available": ragas_available,
             "composite": round(composite, 3),
             "threshold": CI_FAIL_THRESHOLD,
             "gate_pass": gate_pass,
