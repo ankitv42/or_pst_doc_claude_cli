@@ -1,0 +1,224 @@
+Yes, and it goes much deeper than just those two. Let me map the full picture, specifically calibrated for what FAANG engineers actually deal with and
+  what interviewers expect you to know.
+
+  ---
+  The Full Quality Stack at Fortune 100 AI Companies
+
+  Think of it as five distinct layers, each catching a different class of failure.
+
+  ---
+  Layer 1 — Unit Tests (pytest)
+
+  Tests individual functions in isolation. No LLM, no DB, no network. Pure logic.
+
+  What gets unit-tested at FAANG:
+  - Scoring/ranking formulas (like ORCA's Agent 3 formula)
+  - Routing logic (SUSPEND → AUTO_EXECUTE → ESCALATE)
+  - Data transformation functions
+  - Tokenization, chunking, parsing
+  - Business rules (Class A never gets Option B)
+
+  What does NOT get unit-tested:
+  - LLM outputs (non-deterministic)
+  - Retrieval quality (requires real embeddings)
+  - End-to-end pipeline behavior
+
+  This is ORCA's biggest current gap — the scoring formula and routing logic have no pytest coverage, meaning if someone accidentally changes a
+  coefficient, no automated check catches it.
+
+  ---
+  Layer 2 — Integration Tests
+
+  Tests that multiple components work together, using real (or realistic) dependencies.
+
+  At FAANG this typically means:
+  - Spinning up a test database, running a real query, asserting the result
+  - Calling the real retriever against a small test index
+  - Running the pipeline with a mock LLM but real DB and real tools
+
+  ORCA has none of these yet. The MCP tools and db/queries.py are completely untested in combination.
+
+  ---
+  Layer 3 — Offline Eval Gate (what ORCA has)
+
+  This is the LLM-specific layer. Tests AI behavior against a fixed golden dataset. What ORCA has built maps directly to real industry practice:
+
+  ┌─────────────────────────────────┬─────────────────────────────────┐
+  │              ORCA               │       Industry equivalent       │
+  ├─────────────────────────────────┼─────────────────────────────────┤
+  │ golden_dataset.py               │ "Eval set" / "Golden set"       │
+  ├─────────────────────────────────┼─────────────────────────────────┤
+  │ run_retrieval_eval.py           │ Retrieval quality eval          │
+  ├─────────────────────────────────┼─────────────────────────────────┤
+  │ LLM-as-judge (llama-3.3-70b)    │ Model-based eval / "Auto-rater" │
+  ├─────────────────────────────────┼─────────────────────────────────┤
+  │ Composite score ≥ 0.75          │ Quality gate threshold          │
+  ├─────────────────────────────────┼─────────────────────────────────┤
+  │ GitHub Actions block on failure │ CI merge gate                   │
+  └─────────────────────────────────┴─────────────────────────────────┘
+
+  Google calls this an "evals framework". OpenAI has an open-source evals library. Anthropic runs evals before every model release. Meta calls theirs
+  "model quality gates". The terminology differs; the concept is identical.
+
+  What makes a production golden set different from ORCA's current one:
+  - Every case is verified against real output (not written from memory)
+  - Hundreds or thousands of cases, not 12
+  - Stratified: covers edge cases, adversarial inputs, distribution shifts
+  - Versioned alongside the model/codebase in git
+
+  ---
+  Layer 4 — Shadow Mode / Offline Replay
+
+  This is where FAANG diverges significantly from what most portfolio projects show.
+
+  How it works: You record real production traffic. When you ship a new model version, you replay that recorded traffic through both the old model and the
+  new one, compare outputs side-by-side, and measure regressions — without touching live users.
+
+  Production traffic ──recorded──► Replay system ──► Old model output
+                                                 └──► New model output
+                                                           │
+                                                Compare: regressions? improvements?
+
+  At Google, this is called "serving shadow traffic". At Meta, it's part of their "offline experimentation" infrastructure. At Amazon, it's built into
+  their "canary analysis" system.
+
+  ORCA's db/pipeline_log table is the seed of this — it saves real decisions. Blueprint item E4 (online/drift eval) is the natural extension. In an
+  interview, being able to say "I understand shadow mode and have designed toward it" is a strong signal.
+
+  ---
+  Layer 5 — Online Evaluation (Production Monitoring)
+
+  The hardest and most important layer. Tests the system on live traffic continuously.
+
+  What FAANG monitors in production for AI systems:
+
+  ┌─────────────────────────────┬────────────────────────────────────────────────────┐
+  │           Signal            │                  What it catches                   │
+  ├─────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Output quality drift        │ Model degrades over time as world changes          │
+  ├─────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Latency p50/p95/p99         │ Slow responses hurt user experience                │
+  ├─────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Error rate by category      │ Specific input types start failing                 │
+  ├─────────────────────────────┼────────────────────────────────────────────────────┤
+  │ LLM output distribution     │ Answer length, confidence, refusal rate shifts     │
+  ├─────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Business metric correlation │ Does AI quality correlate with conversion/revenue? │
+  ├─────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Feedback loops              │ User thumbs-up/down, downstream action rates       │
+  └─────────────────────────────┴────────────────────────────────────────────────────┘
+
+  At Google, this is part of their ML monitoring infrastructure (internally called things like "model health dashboards"). At Meta, it plugs into Scuba
+  (their real-time analytics system). At Amazon, it feeds into CloudWatch with custom metrics.
+
+  The key insight for interviews: offline evals tell you if the model is good. Online monitoring tells you if the product is working. A model can score
+  perfectly on golden cases and still fail users because the input distribution shifted (e.g., a new product category was added that the model never saw).
+
+  ---
+  Layer 6 — Human Evaluation
+
+  Before major releases, FAANG companies use human raters at scale.
+
+  - Google Search: Thousands of contracted "Search Quality Raters" score search results using a detailed rubric (publicly available — the "Search Quality
+  Evaluator Guidelines")
+  - Meta: "Human evaluation panels" for content moderation model releases
+  - OpenAI: RLHF-style human preference data collection
+  - Anthropic: Red team contractors + Constitutional AI human feedback
+
+  For ORCA this would look like: "give 5 inventory managers these 20 pipeline decisions and ask them to rate whether they'd approve the recommendation."
+  The LLM judge is a cheap proxy for this.
+
+  ---
+  Layer 7 — Red Teaming
+
+  Adversarial testing. Humans (or automated systems) try to make the AI fail.
+
+  At FAANG:
+  - Safety red teams: try to get the model to produce harmful output
+  - Functionality red teams: try to find edge cases that break the logic (null inputs, very large orders, unusual SKU categories)
+  - Security red teams: prompt injection, jailbreaks, data extraction
+
+  ORCA doesn't have this, but the Class A safety rule (classa_safety judge criterion) is a simple form of it — testing that a specific hard rule is never
+  violated.
+
+  ---
+  Layer 8 — Canary / A/B Rollout
+
+  Before fully deploying a new model version, you route a small percentage of traffic to it.
+
+  100% of users ──► Old model (v1)
+
+  After canary starts:
+   95% of users ──► Old model (v1)
+    5% of users ──► New model (v2) ← watch metrics here
+
+  If metrics on the 5% look good after N hours, ramp to 20%, then 50%, then 100%. If metrics degrade, instantly rollback.
+
+  This is standard at Google (their internal tools handle this), Meta (their experimentation framework), Amazon (CodeDeploy canary deployments). It's not
+  in ORCA, but knowing about it is interview-critical.
+
+  ---
+  The Full Picture as a Diagram
+
+  CODE CHANGE
+      │
+      ▼
+  pytest (unit + integration)  ──FAIL──► Block PR
+      │ PASS
+      ▼
+  Offline eval gate (golden set + LLM judge)  ──FAIL──► Block PR
+      │ PASS
+      ▼
+  Shadow mode (replay production traffic, compare outputs)
+      │ No regression
+      ▼
+  Canary deploy (5% of real traffic)
+      │ Metrics healthy
+      ▼
+  Full production rollout
+      │
+      ▼
+  Online monitoring (continuous drift detection, latency, error rates)
+      │ Drift detected
+      ▼
+  Human eval / red team (on-demand, before major releases)
+
+  ---
+  What FAANG Interviewers Specifically Test
+
+  For an ML/AI engineer interview at Google, you'll get system design questions like:
+
+  "Design a quality assurance system for an LLM-powered feature."
+
+  The answer they want to hear covers:
+  1. What are the failure modes? (retrieval failure, hallucination, rule violation, latency, safety)
+  2. How do you test each offline? (golden set, LLM judge, unit tests for rules)
+  3. How do you test safely in production? (shadow mode, canary)
+  4. How do you detect degradation over time? (online monitoring, drift detection)
+  5. What do humans evaluate vs what do you automate? (automate cheap/frequent checks, humans for high-stakes edge cases)
+
+  ---
+  Where ORCA Currently Sits
+
+  ┌─────────────────────┬───────────────────────────────────────────────────────┐
+  │        Layer        │                      ORCA Status                      │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Unit tests (pytest) │ Missing — biggest gap for Google                      │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Integration tests   │ Missing                                               │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Offline eval gate   │ Partially built — 60% done                            │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Shadow mode         │ Seed exists (pipeline_log) — not implemented          │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Canary/A/B          │ Not implemented (Render free tier doesn't support it) │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Online monitoring   │ Not implemented — blueprint item E4                   │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Human eval          │ Not implemented                                       │
+  ├─────────────────────┼───────────────────────────────────────────────────────┤
+  │ Red teaming         │ classa_safety criterion is a micro version            │
+  └─────────────────────┴───────────────────────────────────────────────────────┘
+
+  For Google specifically: fixing pytest (Wave 3, C2) and being able to articulate the full stack above in a system design interview will carry you further
+  than having all layers built. They test your understanding of the architecture, not just what's in your repo.
