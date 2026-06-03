@@ -147,14 +147,36 @@ ANSWER:
 
 
 def generate_answer(agent_model, retriever, case):
-    """Retrieve real context and have the AGENT model answer the question."""
-    # use a broad retrieval for the question (agent1 path is a reasonable default)
-    context = retriever.query_for_agent1(
-        category=case.get("category", "Grocery"),
-        abc_class=case.get("abc_class", "B"),
-        urgency=case.get("urgency", "HIGH"),
-        event_name=case.get("event_name"),
-    )
+    """Retrieve real context and have the AGENT model answer the question.
+
+    Routes to the correct retriever method based on each case's retriever_agent
+    field — different agents surface different policy chunks.
+    """
+    agent_key = case.get("retriever_agent", "agent1")
+
+    if agent_key == "agent2":
+        context = retriever.query_for_agent2(
+            category=case.get("category", "Grocery"),
+            abc_class=case.get("abc_class", "B"),
+            urgency=case.get("urgency", "HIGH"),
+            supplier_name=case.get("supplier_name"),
+            lead_time_too_late=case.get("lead_time_too_late", False),
+        )
+    elif agent_key == "agent3":
+        context = retriever.query_for_agent3(
+            category=case.get("category", "Grocery"),
+            urgency=case.get("urgency", "HIGH"),
+            abc_class=case.get("abc_class", "B"),
+            approval_pool=case.get("approval_pool"),
+        )
+    else:  # agent1 (default)
+        context = retriever.query_for_agent1(
+            category=case.get("category", "Grocery"),
+            abc_class=case.get("abc_class", "B"),
+            urgency=case.get("urgency", "HIGH"),
+            event_name=case.get("event_name"),
+        )
+
     prompt = (
         "You are an inventory planning assistant. Using ONLY the policy context "
         "below, answer the question concisely.\n\n"

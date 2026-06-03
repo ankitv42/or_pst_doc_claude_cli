@@ -24,6 +24,8 @@ RAGAS_CASES = [
         "category": "Grocery",
         "abc_class": "A",
         "urgency": "CRITICAL",
+        "approval_pool": "CP003",
+        "retriever_agent": "agent3",   # capital pool question — agent3 retrieves pool rules
     },
     {
         "id": "RG-CLASSA-OPTIONB",
@@ -32,6 +34,7 @@ RAGAS_CASES = [
         "category": "Grocery",
         "abc_class": "A",
         "urgency": "HIGH",
+        "retriever_agent": "agent2",   # option building rules question — agent2 retrieves supplier/option context
     },
     {
         "id": "RG-RAMADAN-UPLIFT",
@@ -41,6 +44,7 @@ RAGAS_CASES = [
         "abc_class": "B",
         "urgency": "HIGH",
         "event_name": "Ramadan",
+        "retriever_agent": "agent1",   # event/demand question — agent1 retrieves event context (correct)
     },
     {
         "id": "RG-PENALTY-RULE",
@@ -49,6 +53,8 @@ RAGAS_CASES = [
         "category": "Electronics",
         "abc_class": "A",
         "urgency": "CRITICAL",
+        "approval_pool": "CP003",
+        "retriever_agent": "agent3",   # scoring formula question — agent3 retrieves formula/routing rules
     },
     {
         "id": "RG-SUSPEND-RULE",
@@ -57,5 +63,7 @@ RAGAS_CASES = [
         "category": "Grocery",
         "abc_class": "B",
         "urgency": "HIGH",
+        "approval_pool": "CP001",
+        "retriever_agent": "agent3",   # routing/approval question — agent3 retrieves routing rules
     },
 ]
