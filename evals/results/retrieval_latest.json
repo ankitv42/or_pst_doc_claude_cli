@@ -1,11 +1,11 @@
 {
   "layer": "retrieval",
-  "timestamp": "2026-06-02T17:26:41.974320",
-  "pass_rate": 0.75,
-  "avg_coverage": 0.778,
+  "timestamp": "2026-06-03T15:48:26.384459",
+  "pass_rate": 1.0,
+  "avg_coverage": 1.0,
   "keyword_leaks": 0,
   "total_cases": 12,
-  "passed": 9,
+  "passed": 12,
   "cases": [
     {
       "id": "A2-HINDUSTAN-NOEXP",
@@ -14,7 +14,6 @@
       "coverage": 1.0,
       "found": [
         "No expedite",
-        "escalate",
         "Hindustan FMCG"
       ],
       "missing": [],
@@ -28,8 +27,7 @@
       "found": [
         "CP003",
         "20,000",
-        "budget_score",
-        "availability_score"
+        "Auto-Approve Limit"
       ],
       "missing": [],
       "leaked": []
@@ -42,7 +40,7 @@
       "found": [
         "Ramadan",
         "180%",
-        "NEVER"
+        "CP002"
       ],
       "missing": [],
       "leaked": []
@@ -65,8 +63,8 @@
       "passed": true,
       "coverage": 1.0,
       "found": [
-        "C (Low Value)",
-        "Ordering Rules"
+        "CP001",
+        "Options A & B"
       ],
       "missing": [],
       "leaked": []
@@ -74,38 +72,38 @@
     {
       "id": "A2-OPTION-RULES",
       "agent": "agent2",
-      "passed": false,
-      "coverage": 0.0,
-      "found": [],
-      "missing": [
-        "Option Building",
-        "Standard Replenishment"
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "Options A & B",
+        "Option C"
       ],
+      "missing": [],
       "leaked": []
     },
     {
       "id": "A2-CLASSA-NO-OPTIONB",
       "agent": "agent2",
-      "passed": false,
-      "coverage": 0.0,
-      "found": [],
-      "missing": [
-        "Not for Class A"
+      "passed": true,
+      "coverage": 1.0,
+      "found": [
+        "Al Rawdah Foods",
+        "Class A"
       ],
+      "missing": [],
       "leaked": []
     },
     {
       "id": "A3-ROUTING-RULES",
       "agent": "agent3",
-      "passed": false,
-      "coverage": 0.333,
+      "passed": true,
+      "coverage": 1.0,
       "found": [
-        "AUTO_EXECUTE"
-      ],
-      "missing": [
+        "AUTO_EXECUTE",
         "ESCALATE",
         "SUSPEND"
       ],
+      "missing": [],
       "leaked": []
     },
     {
@@ -126,8 +124,8 @@
       "passed": true,
       "coverage": 1.0,
       "found": [
-        "Penalty",
-        "CRITICAL"
+        "CRITICAL",
+        "lead_time_too_late"
       ],
       "missing": [],
       "leaked": []

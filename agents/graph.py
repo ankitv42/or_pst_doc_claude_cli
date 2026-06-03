@@ -839,6 +839,26 @@ def hitl_node(state: AgentState) -> dict:
     # query_for_agent4 fires 1 targeted query:
     #   Q1 — HITL briefing format + contact resolution rule
     capital_decision = state.get("capital_decision", {})
+
+    # Pre-extract winner in Python — prevents LLM from re-deciding based on its own heuristic
+    winner_id       = capital_decision.get("recommended", "A")
+    winner_cost_aed = capital_decision.get("approval_amount_aed", 0)
+    winner_pool     = capital_decision.get("approval_pool", "CP001")
+    scored_options  = capital_decision.get("scored_options", [])
+    winner_option   = next((o for o in scored_options if o.get("id") == winner_id), {})
+    winner_score    = winner_option.get("total_score", "N/A")
+
+    winner_summary = (
+        f"WINNER — pre-extracted by system (DO NOT CHANGE):\n"
+        f"  Option {winner_id} | AED {winner_cost_aed:,.0f} | Pool {winner_pool}\n"
+        f"  Score: {winner_score} | Approval required: {capital_decision.get('approval_required', True)}"
+    )
+
+    logger.info(
+        f"HITL winner locked | "
+        f"recommended=Option {winner_id} | "
+        f"approval_amount=AED {winner_cost_aed:,.0f} | pool={winner_pool}"
+    )
     retriever   = _retriever
     if retriever and retriever.is_available():
         policy_context = retriever.query_for_agent1(...)
@@ -860,6 +880,7 @@ def hitl_node(state: AgentState) -> dict:
         demand_summary   = json.dumps(state.get("demand_summary",   {}), indent=2),
         options_package  = json.dumps(state.get("options_package",  {}), indent=2),
         capital_decision = json.dumps(state.get("capital_decision", {}), indent=2),
+        winner_summary   = winner_summary,
         supplier_data    = json.dumps(supplier_data, indent=2),
         policy_context   = policy_context,
     )
@@ -871,7 +892,13 @@ def hitl_node(state: AgentState) -> dict:
 
     response = llm.invoke(messages)
     briefing = response.content.strip()
- 
+
+    if f"Option {winner_id}" not in briefing:
+        logger.warning(
+            f"HITL MISMATCH DETECTED | briefing does not reference winner "
+            f"Option {winner_id} | AED {winner_cost_aed:,.0f}"
+        )
+
     logger.info(f"HITL node complete | {len(briefing)} chars")
     logger.info(
         f"\n{'='*60}\n"

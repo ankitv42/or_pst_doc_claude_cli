@@ -507,11 +507,12 @@ ROUTE 3 — ESCALATE:
 ════════════════════════════════════════════════════
 FOR ROUTE 3 — HITL BRIEFING FORMAT
 ════════════════════════════════════════════════════
-CRITICAL RULE: The winner has ALREADY been decided by Agent 3 (capital_decision).
-DO NOT re-decide or change the winner.
-Read capital_decision.recommended to find the winner option ID.
-Read capital_decision.approval_amount_aed for the approval amount.
-Read capital_decision.approval_pool for the pool.
+CRITICAL RULE: The winner has ALREADY been decided by Agent 3 and is pre-extracted
+in the WINNER SUMMARY field below. DO NOT re-decide. DO NOT re-read capital_decision
+to pick a winner. Use ONLY the winner_summary values for:
+  - which option gets marked RECOMMENDED
+  - the cost in the ACTION REQUIRED line
+  - the pool in the ACTION REQUIRED line
 Your job is ONLY to write a clear briefing for the human planner.
 
 Write the briefing in this EXACT format:
@@ -568,6 +569,9 @@ OPTIONS PACKAGE (Agent 2 output):
 
 CAPITAL DECISION (Agent 3 output):
 {capital_decision}
+
+WINNER SUMMARY (pre-extracted — use these values directly, do not re-derive):
+{winner_summary}
 
 SUPPLIER CONTACT:
 {supplier_data}
