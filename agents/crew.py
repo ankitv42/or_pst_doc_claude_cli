@@ -55,20 +55,20 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-# litellm short-path install — workaround for Windows long path limit
-# litellm installed via: pip install litellm --target C:\lit
-sys.path.insert(0, r"C:/lit")
+# litellm short-path — append rather than prepend so venv packages take priority.
+# Prepending C:/lit caused FlagEmbedding (BGE reranker) to segfault due to
+# conflicting native library versions when get_retriever() was called.
+sys.path.append(r"C:/lit")
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from crewai import Agent, Task, Crew, Process
+from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
 
 from db.queries import get_all_positions_for_sku, get_sales_velocity
-from docs.rag.retriever import get_retriever
 
 logger = logging.getLogger("orca.crew")
 
@@ -77,16 +77,22 @@ logger = logging.getLogger("orca.crew")
 # LLM — Groq via litellm (fast, free, correct tool-use format)
 # ==============================================================================
 
-def _get_crew_llm() -> str:
+def _get_crew_llm() -> LLM:
     """
-    Returns Groq model string for CrewAI via litellm.
-    
-    llama-3.3-70b-versatile — current Groq recommended model for tool use.
-    Replaces deprecated llama3-groq-8b-8192-tool-use-preview.
-    70B model — much better reasoning than 8B for tool orchestration.
-    Free on Groq. ~14,400 requests/day.
+    Returns a CrewAI LLM object for Groq.
+
+    Using CrewAI's own LLM class instead of a bare string:
+      - is_anthropic=False prevents cache_breakpoint injection
+      - Gives CrewAI explicit control over tool-call formatting for Groq
+    llama-3.3-70b-versatile: tool-use optimised, free on Groq (~14,400 req/day).
+    llama-3.1-8b-instant generates XML tool format and fails with Groq's JSON API.
     """
-    return "groq/llama-3.3-70b-versatile"
+    return LLM(
+        model        = "groq/llama-3.3-70b-versatile",
+        api_key      = os.getenv("GROQ_API_KEY"),
+        temperature  = 0,
+        is_anthropic = False,
+    )
 
 
 # ==============================================================================
@@ -158,39 +164,6 @@ def get_velocity_tool(sku_id: str) -> str:
         return json.dumps({"error": str(e), "sku_id": sku_id})
 
 
-@tool("query_policy_knowledge")
-def query_rag_tool(query: str) -> str:
-    """
-    Searches the ORCA knowledge base for business rules, event planning guidelines,
-    supplier SLA terms, ordering policies, and capital pool rules.
-
-    Input: plain English query string.
-    Example: ordering rules Class B Electronics CRITICAL urgency DSF event
-    Example: TechLine Asia lead time expedite premium Electronics
-    """
-    try:
-        retriever = get_retriever()
-        if not retriever.is_available():
-            return "Knowledge base unavailable. Proceed with general knowledge."
-
-        doc_types = ["policy", "event", "supplier", "graph"]
-        chunks    = retriever._hybrid_retrieve(query, doc_types, top_k=5)
-        chunks    = retriever._rerank(query, chunks)
-
-        if not chunks:
-            return "No relevant policy found."
-
-        parts = []
-        for c in chunks[:2]:
-            meta    = c.get("metadata", {})
-            dtype   = meta.get("doc_type", "").capitalize()
-            section = meta.get("section_name", "")[:50]
-            text    = c["text"].strip()[:400]
-            parts.append(f"[{dtype}] {section}\n{text}")
-
-        return "\n\n---\n\n".join(parts)
-    except Exception as e:
-        return f"RAG query error: {str(e)}"
 
 
 # ==============================================================================
@@ -229,20 +202,24 @@ def _build_agents(llm: str):
     market_analyst = Agent(
         role="Market Analyst — UAE Retail Planning",
         goal=(
-            "Research business context for the given SKU — upcoming events, "
-            "ordering policy rules, and supplier constraints. "
-            "Use the knowledge base tool to find verified rules."
+            "Assess business context for the given SKU — event impact, "
+            "ordering policy constraints, and lead time adequacy. "
+            "Reason from the facts provided in the task description."
         ),
         backstory=(
             "You are a UAE retail planning specialist who understands event-driven "
-            "demand and supplier lead time constraints. "
-            "You use the ORCA knowledge base to retrieve verified business rules."
+            "demand and ORCA policy rules. Key rules you know: "
+            "Class A SKUs require full distribution (Option B never allowed). "
+            "CRITICAL urgency triggers if critical_stores > 5 or lead_time_too_late=True. "
+            "Lead time is too late if effective_lead_time > 30 and urgency is CRITICAL. "
+            "Ramadan: 180% uplift for Grocery/Dates/Beverages, 60-day planning lead. "
+            "Dubai Shopping Festival: 90% uplift for Electronics, order 80 days ahead."
         ),
-        tools=[query_rag_tool],
+        tools=[],
         llm=llm,
         verbose=True,
         allow_delegation=False,
-        max_iter=5,
+        max_iter=3,
     )
 
     forecast_strategist = Agent(
