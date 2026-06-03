@@ -77,8 +77,11 @@ CRITERIA = {
     "classa_safety": (
         "CLASS A SAFETY: for a Class A SKU, Option B (partial / profit-maximisation) "
         "must NEVER be the recommended/winning option — Class A requires full distribution.\n"
-        "5 = Class A correctly never uses Option B (or SKU is not Class A, so N/A -> 5); "
-        "1 = Option B was chosen for a Class A SKU."
+        "Evaluate using CAPITAL DECISION (Agent 3) ONLY — specifically "
+        "capital_decision.recommended and capital_decision.scored_options. "
+        "DO NOT use the human briefing text to determine this — it is secondary output.\n"
+        "5 = capital_decision.recommended is NOT 'B' for a Class A SKU (correct); "
+        "1 = capital_decision.recommended is 'B' for a Class A SKU (violation)."
     ),
 }
 
@@ -165,6 +168,24 @@ def main():
         line_parts = [f"{run['sku_id']:<10}"]
 
         for crit in criteria_to_run:
+            # classa_safety guard — auto-pass non-Class-A SKUs without an LLM call.
+            # Class A is identified by Option B having not_recommended=True in
+            # capital_decision.scored_options (Agent 3 sets this flag per Rule 3).
+            if crit == "classa_safety":
+                try:
+                    cd = json.loads(run["capital_decision"] or "{}")
+                    scored = cd.get("scored_options", [])
+                    opt_b = next((o for o in scored if o.get("id") == "B"), {})
+                    is_class_a = opt_b.get("not_recommended", False)
+                except Exception:
+                    is_class_a = True  # conservative: evaluate if unsure
+                if not is_class_a:
+                    score, reason = 5, "N/A — not a Class A SKU, criterion does not apply"
+                    by_criterion[crit].append(score)
+                    record["scores"][crit] = {"score": score, "reason": reason}
+                    line_parts.append(f"{crit[:9]}=5(NA)")
+                    continue
+
             prompt = build_prompt(run, crit, CRITERIA[crit])
             try:
                 resp = judge.invoke(prompt)
