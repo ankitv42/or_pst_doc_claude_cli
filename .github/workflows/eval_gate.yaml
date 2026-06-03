@@ -1,9 +1,9 @@
 name: ORCA Eval Gate
 
-# PR gate — runs on every push/PR to main.
-# Layer 1 (retrieval, free) + composite score in retrieval-only mode.
-# No GROQ_API_KEY needed. Uses pre-built ChromaDB index (no re-ingest).
-# For the full suite (RAGAS + judge) see eval_nightly.yaml.
+# Full eval suite on every push/PR to main.
+# Runs: retrieval + RAGAS + LLM-judge + composite gate (>= 0.75).
+# Requires GROQ_API_KEY set as a GitHub Actions repository secret:
+#   Settings > Secrets and variables > Actions > New repository secret
 
 on:
   push:
@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  retrieval-eval:
+  eval-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -27,22 +27,20 @@ jobs:
       - name: Install eval dependencies
         run: |
           pip install --upgrade pip
-          pip install "chromadb==1.1.1" "sentence-transformers==5.5.0" "rank-bm25==0.2.2" python-dotenv einops
+          pip install "chromadb==1.1.1" "sentence-transformers==5.5.0" "rank-bm25==0.2.2" \
+            python-dotenv einops langchain-groq langchain-core
 
-      - name: Layer 1 — retrieval eval (hard gate >= 70% pass rate, 0 leaks)
-        run: python evals/run_retrieval_eval.py --ci
+      - name: Run full eval suite (retrieval + RAGAS + judge + composite)
+        run: python evals/eval_main.py --ragas-limit 3 --judge-limit 5 --ci
         env:
           PYTHONPATH: .
-
-      - name: Composite score — retrieval-only mode (no RAGAS needed)
-        run: python evals/composite_score.py --ci
-        env:
-          PYTHONPATH: .
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama-3.1-8b-instant
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: eval-results
+          name: eval-results-${{ github.run_number }}
           path: evals/results/
           retention-days: 30
