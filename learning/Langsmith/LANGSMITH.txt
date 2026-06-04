@@ -1,0 +1,172 @@
+---
+  1. What is LangSmith?
+
+  Think of it this way. Right now, every time ORCA runs a pipeline, you see logs like:
+
+  08:42:11  INFO  Agent 3 calling LLM (groq/llama-3.1-8b-instant)...
+  08:42:14  INFO  Agent 3 complete | winner=Option A | amount=AED 11,623
+
+  That tells you what happened. LangSmith tells you everything — in a visual, clickable UI:
+
+  ORCA Pipeline | SKU00078  [3.2s] [1,847 tokens] [ESCALATED]
+  ├── Agent1-Demand Intelligence   [0.8s] [412 tokens]
+  │     INPUT:  {sku_id, positions, velocity, events, policy_context}
+  │     OUTPUT: {urgency: HIGH, critical_stores: 5, demand_trend: stable}
+  ├── Agent2-Supply Replenishment  [0.9s] [523 tokens]
+  │     INPUT:  {demand_summary, supplier_data, policy_context}
+  │     OUTPUT: {options: [A=11623, B=6953, C=18200]}
+  ├── Agent3-Capital Allocation    [1.1s] [612 tokens]
+  │     INPUT:  {options_package, cp001_data, cp003_data}
+  │     OUTPUT: {recommended: A, approval_required: true}
+  ├── Route Node                   [0ms] [0 tokens] — pure Python
+  └── Agent4-HITL Briefing        [0.4s] [300 tokens]
+        INPUT:  {capital_decision, winner_summary, supplier_data}
+        OUTPUT: briefing text
+
+  Every LLM call. Every token. Every millisecond. Every input. Every output. Searchable, filterable, downloadable.
+
+  ---
+  How It Improves ORCA Specifically
+
+  Right now you're blind to these:
+
+  ┌───────────────────────────────────────┬───────────────────────────────────────┬────────────────────────────────────────────────────────────────────────┐
+  │                Problem                │           Without LangSmith           │                             With LangSmith                             │
+  ├───────────────────────────────────────┼───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+  │ Agent 4 generates wrong briefing      │ You know it happened via judge score  │ You see the exact prompt the LLM received and why it picked Option B   │
+  ├───────────────────────────────────────┼───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+  │ Pipeline is slow                      │ You know total time from logs         │ You see Agent 3 takes 1.8s, Agent 1 takes 0.3s — bottleneck identified │
+  ├───────────────────────────────────────┼───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+  │ Groq token limit approaching          │ No visibility                         │ You see tokens per agent, per run, per day                             │
+  ├───────────────────────────────────────┼───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+  │ A prompt change breaks something      │ Judge score drops, you don't know why │ Diff the inputs/outputs between runs                                   │
+  ├───────────────────────────────────────┼───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+  │ CrewAI crew produces bad forecast     │ Fallback log appears                  │ You see all 3 agent outputs, which task failed, the raw error          │
+  ├───────────────────────────────────────┼───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+  │ Policy context not retrieved properly │ Hidden                                │ You see the exact context string injected into each agent's prompt     │
+  └───────────────────────────────────────┴───────────────────────────────────────┴────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Fortune 100 Level — What "Basic" vs "Fortune 100" Looks Like
+
+  Basic LangSmith (just env vars, 3 lines):
+  - Every LLM call traced automatically
+  - Generic run names like "ChatGroq"
+  - No metadata — can't filter by SKU, urgency, or outcome
+  - No scores attached to runs
+  - One flat project with hundreds of unlabelled traces
+
+  Fortune 100 LangSmith (what we're building):
+  - Named runs: "Agent1-Demand | SKU00078 | HIGH" — immediately readable
+  - Rich metadata on every run: sku_id, store_id, pipeline_id, urgency, abc_class, final_status, pool
+  - Tags for filtering: ["escalated", "class-a", "critical", "ramadan"] — find all Class A escalations in one click
+  - Eval scores posted back to traces: judge scores (consistency, hitl_accuracy, classa_safety) attached directly to the run — click a low-scoring trace to see exactly what went wrong
+  - Token budget alerts: pipeline-level token count visible per run, catch runaway prompts
+  - Shared project dashboard: project=orca groups all runs — see pass rate, avg latency, token trend over time
+
+  ---
+  2. Detailed Implementation Plan
+
+  Phase A — Basic Tracing (env vars only, automatic)
+
+  Add to .env:
+  LANGCHAIN_TRACING_V2=true
+  LANGCHAIN_API_KEY=<your-langsmith-key>
+  LANGCHAIN_PROJECT=orca
+
+  This alone gives automatic tracing of every llm.invoke() call. Zero code changes. Takes 2 minutes. Every run will appear in LangSmith immediately.
+
+  ---
+  Phase B — Named Runs + Pipeline Metadata
+
+  agents/graph.py — run_pipeline() function
+
+  Attach top-level pipeline metadata to the LangGraph config so it propagates through all 4 agents:
+
+  config = {
+      "configurable": {"thread_id": pipeline_id},
+      "run_name": f"ORCA Pipeline | {sku_id}",
+      "metadata": {
+          "sku_id":       sku_id,
+          "store_id":     store_id,
+          "pipeline_id":  pipeline_id,
+          "environment":  os.getenv("ENVIRONMENT", "local"),
+      },
+      "tags": ["orca-pipeline"],
+  }
+
+  ---
+  Phase C — Per-Agent Named Spans + Dynamic Tags
+
+  Each agent's llm.invoke() call gets a meaningful name and tags built from the actual runtime data.
+
+  agents/graph.py — each agent node
+
+  # In agent1_node, replace:
+  response = llm.invoke(messages)
+
+  # With:
+  response = llm.with_config({
+      "run_name": f"Agent1-Demand | {sku_id} | {urgency}",
+      "tags": [f"urgency:{urgency}", f"class:{abc_class}", "demand-intelligence"],
+      "metadata": {
+          "agent":         "demand_intelligence",
+          "sku_id":        sku_id,
+          "urgency":       urgency,
+          "abc_class":     abc_class,
+          "critical_stores": critical_stores,
+      },
+  }).invoke(messages)
+
+  Same pattern for agents 2, 3, 4 — each with their own relevant metadata.
+
+  ---
+  Phase D — Final Status Tag (post-routing)
+
+  After route_node determines the outcome (ESCALATE / AUTO_EXECUTE / SUSPEND), tag the run with the final decision. This means you can filter in LangSmith: "show me all ESCALATED runs for
+  Class A SKUs."
+
+  In run_pipeline(), after the graph completes, update the LangSmith run with the final status using langsmith.Client().update_run().
+
+  ---
+  Phase E — Eval Scores Posted Back to Traces
+
+  This is the crown jewel. After run_judge_eval.py scores a pipeline run, post those scores back to LangSmith so each trace shows its quality scores inline:
+
+  from langsmith import Client
+  client = Client()
+
+  # For each graded run:
+  client.create_feedback(
+      run_id   = langsmith_run_id,   # retrieved by matching pipeline_id
+      key      = "consistency",
+      score    = 2.2 / 5,            # normalise to 0-1
+      comment  = "briefing names Option B, capital_decision says Option A",
+  )
+
+  This creates a feedback loop: LangSmith trace → judge grades it → score attached to that exact trace → you click the trace and see why it scored 2.2.
+
+  ---
+  3. Files to Modify / Add
+
+  ┌─────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────┐
+  │          File           │                                        What changes                                        │                    Why                     │
+  ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ .env                    │ Add 3 LANGCHAIN env vars                                                                   │ Enables tracing — required                 │
+  ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ agents/graph.py         │ run_pipeline(): add metadata to config; each node's llm.invoke(): wrap with .with_config() │ Named spans, rich metadata                 │
+  ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ agents/crew.py          │ Wrap crew's LLM calls with metadata                                                        │ CrewAI sub-crew traces labelled separately │
+  ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ evals/run_judge_eval.py │ After grading, post scores to LangSmith via Client().create_feedback()                     │ Traces show quality scores                 │
+  ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ requirements.txt        │ Add langsmith (already installed via langchain dep, just make explicit)                    │ Explicit dependency                        │
+  └─────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────┘
+
+  No changes to: api/main.py, agents/prompts.py, agents/llm_factory.py, db/, evals/ (except judge eval for feedback posting).
+
+  ---
+  Key Design Decision
+
+  LangGraph already propagates the tracing config through every node automatically. We don't touch llm_factory.py because changing the LLM object there would affect all providers. Instead, we
+  use .with_config() at the call site — wraps the existing LLM object without modifying it, purely at invocation time.
