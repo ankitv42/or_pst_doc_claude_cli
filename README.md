@@ -130,7 +130,7 @@ Alert Triggered (stock critical/at-risk)
 | Feature | Description |
 |---|---|
 | 🤖 **Multi-Agent Pipeline** | 4 specialised LangGraph agents, each with a single responsibility |
-| 👥 **CrewAI Integration** | 3-agent crew (Market Analyst, Supply Chain Expert, Risk Assessor) |
+| 👥 **CrewAI Integration** | 3-agent crew (Data Analyst, Market Analyst, Forecast Strategist) inside Agent 1 |
 | 🔌 **MCP Tool Discovery** | Dynamic tool registration via Model Context Protocol — no hardcoded calls |
 | 📚 **RAG Policy Retrieval** | BGE reranker + ChromaDB for policy-grounded decisions |
 | ✋ **HITL Approval Workflow** | LangGraph interrupt → human reviews briefing → approve/reject |
@@ -151,7 +151,7 @@ Multi-Agent        CrewAI 1.14.4
 Tool Protocol      MCP (Model Context Protocol)
 LLM                Groq / llama-3.1-8b-instant
 Embeddings         nomic-ai/nomic-embed-text-v1.5
-Reranker           BAAI/bge-reranker-base
+Reranker           BAAI/bge-reranker-v2-m3
 Vector Store       ChromaDB 1.1.1
 API Framework      FastAPI 0.136 + Uvicorn
 Dashboard          Streamlit 1.57
@@ -159,7 +159,7 @@ HTTP Client        httpx 0.28
 Database           SQLite + SQLAlchemy
 Containerisation   Docker + docker-compose
 Deployment         Render.com (free tier)
-Observability      LangSmith (hooks ready)
+Observability      LangSmith (integrated — all LLM calls traced)
 ```
 
 ---
@@ -234,9 +234,11 @@ orca-retail/
 │   ├── app.py            # Streamlit UI — 3 tabs
 │   └── api_client.py     # HTTP client wrapper
 │
-├── docs/rag/
-│   ├── ingest.py         # PDF → chunks → ChromaDB
-│   └── retriever.py      # BGE reranker retrieval
+├── docs/
+│   ├── rag/
+│   │   ├── ingest.py         # PDF → chunks → ChromaDB
+│   │   └── retriever.py      # BGE reranker retrieval
+│   └── adr/                  # Architecture Decision Records (ADR-001 to ADR-005)
 │
 ├── db/
 │   ├── queries.py        # SQLite query layer
@@ -290,17 +292,15 @@ Full interactive docs: [https://orca-retail.onrender.com/docs](https://orca-reta
 
 ## 📐 Architecture Decision Records
 
-| Decision | Choice | Rationale |
+Full ADR documents are in [`docs/adr/`](docs/adr/).
+
+| ADR | Decision | Choice |
 |---|---|---|
-| Graph framework | LangGraph | Stateful, interruptible, production-grade checkpointing |
-| Multi-agent | CrewAI | Role-based agents with built-in crew orchestration |
-| Tool protocol | MCP | Dynamic discovery vs hardcoded tool calls |
-| LLM provider | Groq | Free tier, fast inference, llama-3.1 quality |
-| HITL pattern | LangGraph interrupt | Clean pause/resume without polling hacks |
-| API pattern | FastAPI + 202 | Non-blocking — pipeline runs as background task |
-| Vector store | ChromaDB | Local, no external service, Docker-friendly |
-| Dashboard | Streamlit | Python-native, rapid UI, sufficient for ops tools |
-| Deployment | Render free | Zero cost public URL for portfolio demo |
+| ADR-001 | Graph framework | LangGraph — stateful, interruptible, production-grade checkpointing |
+| ADR-002 | Tool protocol | MCP — dynamic discovery vs hardcoded tool calls |
+| ADR-003 | Eval metrics | Native RAGAS metrics over RAGAS library |
+| ADR-004 | ChromaDB index | Committed to repo for reproducible CI |
+| ADR-005 | HITL routing | Cost vs auto-approve limit — pure Python, no LLM |
 
 ---
 
@@ -313,7 +313,7 @@ Full interactive docs: [https://orca-retail.onrender.com/docs](https://orca-reta
 | Sprint 3 | RAG (ChromaDB + BGE) + CrewAI | ✅ Complete |
 | Sprint 4 | FastAPI + Streamlit HITL Dashboard | ✅ Complete |
 | Sprint 5 | Docker + Render Deployment | ✅ Complete |
-| Sprint 6 | LangSmith Tracing + Redis + ADRs | 🔜 Planned |
+| Sprint 6 | LangSmith Tracing + ADRs ✅ · Redis 🔜 | 🔄 In Progress |
 
 ---
 
