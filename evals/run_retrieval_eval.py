@@ -36,6 +36,49 @@ RESULTS_DIR.mkdir(exist_ok=True)
 CI_MIN_PASS_RATE = 0.70          # at least 70% of cases must pass for CI
 
 
+def _log_retrieval_to_langsmith(pass_rate, passed, total, leaks, avg_coverage, cases):
+    """
+    Logs retrieval eval summary to LangSmith as a standalone run.
+    Gives a pass-rate trend over time in the project dashboard.
+    Silently skips if LangSmith tracing is not configured.
+    """
+    if os.getenv("LANGCHAIN_TRACING_V2", "false").lower() != "true":
+        return
+    try:
+        from langsmith import Client
+        from datetime import timezone
+        client = Client()
+        run_id = client.create_run(
+            name        = "ORCA-Retrieval-Eval",
+            run_type    = "chain",
+            project_name= os.getenv("LANGCHAIN_PROJECT", "orca"),
+            tags        = ["retrieval-eval", "layer1", f"pass:{passed}/{total}"],
+            inputs      = {"golden_cases": total},
+            outputs     = {
+                "pass_rate":      round(pass_rate, 3),
+                "passed":         passed,
+                "total":          total,
+                "keyword_leaks":  leaks,
+                "avg_coverage":   round(avg_coverage, 3),
+                "gate_passed":    pass_rate >= CI_MIN_PASS_RATE and leaks == 0,
+            },
+            start_time  = datetime.now(timezone.utc),
+            end_time    = datetime.now(timezone.utc),
+        )
+        # post per-case feedback scores (1.0 = pass, 0.0 = fail)
+        for case in cases:
+            if "error" in case:
+                continue
+            client.create_feedback(
+                run_id  = run_id,
+                key     = f"retrieval_{case['id']}",
+                score   = 1.0 if case.get("passed") else 0.0,
+                comment = f"coverage={case.get('coverage', 0):.0%}  missing={case.get('missing', [])}",
+            )
+    except Exception:
+        pass   # never crash the eval because of LangSmith
+
+
 def call_retriever(retriever, case):
     methods = {
         "agent1": retriever.query_for_agent1,
@@ -133,6 +176,10 @@ def main():
     with open(out, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"  Saved: {out}")
+
+    # log retrieval eval summary to LangSmith as a standalone run so pass
+    # rate trends over time in the project dashboard
+    _log_retrieval_to_langsmith(pass_rate, pass_count, total, total_leaks, avg_cov, results)
 
     if args.ci:
         gate_ok = (pass_rate >= CI_MIN_PASS_RATE) and (total_leaks == 0)

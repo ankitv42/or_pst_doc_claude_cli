@@ -98,8 +98,9 @@ def ask_judge_for_score(judge, instruction):
         return None
 
 
-def metric_faithfulness(judge, answer, context):
-    return ask_judge_for_score(judge,
+def metric_faithfulness(judge, answer, context, case_id=""):
+    return ask_judge_for_score(
+        judge.with_config({"run_name": f"RAGAS-Judge-Faithfulness | {case_id}", "tags": ["ragas-eval", "faithfulness"]}),
         f"""Measure FAITHFULNESS. Of the factual claims in the ANSWER, what fraction
 are directly supported by the CONTEXT? 1.0 = every claim supported; 0.0 = none.
 
@@ -110,8 +111,9 @@ ANSWER:
 {answer}""")
 
 
-def metric_context_recall(judge, ground_truth, context):
-    return ask_judge_for_score(judge,
+def metric_context_recall(judge, ground_truth, context, case_id=""):
+    return ask_judge_for_score(
+        judge.with_config({"run_name": f"RAGAS-Judge-ContextRecall | {case_id}", "tags": ["ragas-eval", "context-recall"]}),
         f"""Measure CONTEXT RECALL. Of the facts stated in the GROUND TRUTH answer,
 what fraction are present in the CONTEXT? 1.0 = all facts present; 0.0 = none.
 
@@ -122,8 +124,9 @@ CONTEXT:
 {context}""")
 
 
-def metric_context_precision(judge, question, context):
-    return ask_judge_for_score(judge,
+def metric_context_precision(judge, question, context, case_id=""):
+    return ask_judge_for_score(
+        judge.with_config({"run_name": f"RAGAS-Judge-ContextPrecision | {case_id}", "tags": ["ragas-eval", "context-precision"]}),
         f"""Measure CONTEXT PRECISION. How relevant is the CONTEXT to the QUESTION?
 1.0 = all of it is relevant; 0.0 = it is mostly irrelevant noise.
 
@@ -134,8 +137,9 @@ CONTEXT:
 {context}""")
 
 
-def metric_answer_relevance(judge, question, answer):
-    return ask_judge_for_score(judge,
+def metric_answer_relevance(judge, question, answer, case_id=""):
+    return ask_judge_for_score(
+        judge.with_config({"run_name": f"RAGAS-Judge-AnswerRelevance | {case_id}", "tags": ["ragas-eval", "answer-relevance"]}),
         f"""Measure ANSWER RELEVANCE. Does the ANSWER directly address the QUESTION?
 1.0 = fully on-point; 0.0 = does not answer it.
 
@@ -182,7 +186,15 @@ def generate_answer(agent_model, retriever, case):
         "below, answer the question concisely.\n\n"
         f"CONTEXT:\n{context}\n\nQUESTION: {case['question']}\n\nANSWER:"
     )
-    resp = agent_model.invoke(prompt)
+    resp = agent_model.with_config({
+        "run_name": f"RAGAS-Agent | {case['id']}",
+        "tags":     ["ragas-eval", "agent-answer", f"retriever:{agent_key}"],
+        "metadata": {
+            "eval_case_id":    case["id"],
+            "retriever_agent": agent_key,
+            "question":        case["question"][:120],
+        },
+    }).invoke(prompt)
     return resp.content, context
 
 
@@ -213,11 +225,12 @@ def main():
         print(f"\n[{case['id']}] {case['question'][:60]}...")
         answer, context = generate_answer(agent_model, retriever, case)
 
+        cid = case["id"]
         scores = {
-            "faithfulness":      metric_faithfulness(judge, answer, context),
-            "context_recall":    metric_context_recall(judge, case["ground_truth"], context),
-            "context_precision": metric_context_precision(judge, case["question"], context),
-            "answer_relevance":  metric_answer_relevance(judge, case["question"], answer),
+            "faithfulness":      metric_faithfulness(judge, answer, context, cid),
+            "context_recall":    metric_context_recall(judge, case["ground_truth"], context, cid),
+            "context_precision": metric_context_precision(judge, case["question"], context, cid),
+            "answer_relevance":  metric_answer_relevance(judge, case["question"], answer, cid),
         }
         for m, v in scores.items():
             if v is not None:
