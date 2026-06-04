@@ -93,6 +93,7 @@ Usage:
 import sys
 sys.path.append(r"C:/lit")
 import json
+import sqlite3
 import asyncio
 import logging
 from pathlib import Path
@@ -106,7 +107,7 @@ from dotenv import load_dotenv
 load_dotenv()
  
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agents.llm_factory import get_llm, get_provider_name, get_model_name
@@ -1237,7 +1238,12 @@ def build_graph():
     builder.add_edge("suspend_node", "save_node")
     builder.add_edge("save_node",    END)
 
-    checkpointer = MemorySaver()
+    # SqliteSaver persists checkpoints to disk — HITL-paused pipelines survive
+    # server restarts. check_same_thread=False required because FastAPI serves
+    # requests from a thread pool (multiple threads share this connection).
+    _CHECKPOINT_DB = Path(__file__).parent.parent / "db" / "checkpoints.db"
+    _checkpoint_conn = sqlite3.connect(str(_CHECKPOINT_DB), check_same_thread=False)
+    checkpointer = SqliteSaver(_checkpoint_conn)
 
     app = builder.compile(
         checkpointer=checkpointer,

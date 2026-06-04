@@ -77,6 +77,7 @@ sys.path.append(r"C:/lit")   # litellm short-path — Windows workaround
 import json
 import logging
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -101,7 +102,7 @@ from api.models import (
 from agents.graph import run_pipeline, resume_pipeline, get_pipeline_state
 from agents.graph import _retriever
 from agents.llm_factory import get_provider_name, get_model_name
-from db.queries import get_critical_alerts
+from db.queries import get_critical_alerts, get_sku_details
 from db.pipeline_log import create_pipeline_table
 
 logger = logging.getLogger("orca.api")
@@ -118,17 +119,21 @@ logging.basicConfig(
 # ==============================================================================
 
 _pipeline_store: dict[str, dict] = {}
+_store_lock = threading.Lock()   # guards _pipeline_store against concurrent updates
+
 
 def _now() -> str:
     """Returns current UTC time as ISO string."""
     return datetime.now(timezone.utc).isoformat()
 
+
 def _store_update(pipeline_id: str, **kwargs):
     """Thread-safe update of pipeline store entry."""
-    if pipeline_id not in _pipeline_store:
-        _pipeline_store[pipeline_id] = {}
-    _pipeline_store[pipeline_id].update(kwargs)
-    _pipeline_store[pipeline_id]["last_updated"] = _now()
+    with _store_lock:
+        if pipeline_id not in _pipeline_store:
+            _pipeline_store[pipeline_id] = {}
+        _pipeline_store[pipeline_id].update(kwargs)
+        _pipeline_store[pipeline_id]["last_updated"] = _now()
 
 
 # ==============================================================================
@@ -673,6 +678,15 @@ async def run_pipeline_endpoint(
         Pauses and waits for POST /approve or /reject.
     """
     from datetime import date
+
+    # validate SKU exists in DB before launching expensive background task
+    sku = get_sku_details(body.sku_id)
+    if sku is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"SKU '{body.sku_id}' not found in inventory database.",
+        )
+
     pipeline_id = f"PIPE_{body.sku_id}_{date.today().strftime('%Y-%m-%d')}"
 
     # check if already running
