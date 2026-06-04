@@ -105,7 +105,7 @@ class DemandSummary(BaseModel):
     urgency:              Optional[str]   = None
     critical_stores:      Optional[int]   = None
     at_risk_stores:       Optional[int]   = None
-    projected_shortfall:  Optional[int]   = None
+    projected_shortfall:  Optional[float]   = None
     lead_time_too_late:   Optional[bool]  = None
     event_name:           Optional[str]   = None
     demand_trend:         Optional[str]   = None
