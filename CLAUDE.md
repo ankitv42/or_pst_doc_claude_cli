@@ -57,6 +57,13 @@ python evals/run_retrieval_eval.py --ci     # CI gate mode (fails if pass rate <
 python evals/run_judge_eval.py              # Layer 2 LLM-as-judge (under development)
 ```
 
+**Quick smoke tests (each file has a `__main__` block):**
+```bash
+python agents/graph.py      # runs pipeline on top DB alert
+python agents/tools.py      # tests all 6 MCP tools via LangChain @tool
+python mcp_server/server.py # verifies MCP server starts and lists tools
+```
+
 There are no pytest unit tests — evals are the primary correctness mechanism.
 
 ## Architecture
@@ -69,9 +76,11 @@ Streamlit Dashboard ──HTTP──► FastAPI Backend ──► LangGraph 4-Ag
                                                └── RAG retrieval (docs/rag/retriever.py)
 ```
 
-**API Pattern:** FastAPI returns `202` immediately and runs the pipeline in a thread pool background task. Dashboard polls `/pipeline/{run_id}` every 3 seconds for progress updates.
+**API Pattern:** FastAPI returns `202` immediately and runs the pipeline in a thread pool background task. Dashboard polls `/pipeline/{run_id}/state` every 3 seconds for progress updates.
 
-**HITL Pause/Resume:** Uses LangGraph's `interrupt_before=["execute_node"]` + `MemorySaver` checkpointer. When Agent 4 routes to `ESCALATE`, the graph pauses and waits indefinitely for the human to approve/reject via the dashboard. Resume is triggered by `POST /approve/{run_id}` or `/reject/{run_id}`.
+**HITL Pause/Resume:** Uses LangGraph's `interrupt_before=["execute_node"]` + `SqliteSaver` checkpointer (stored at `db/checkpoints.db`). When Agent 4 routes to `ESCALATE`, the graph pauses and waits indefinitely for the human to approve/reject via the dashboard. Resume is triggered by `POST /api/v1/pipeline/{pipeline_id}/approve`.
+
+**Pipeline ID format:** `PIPE_{sku_id}_{YYYY-MM-DD}` — one pipeline per SKU per day. The API rejects duplicate runs with a 409.
 
 ## The 4-Agent Pipeline (`agents/`)
 
@@ -82,11 +91,25 @@ Streamlit Dashboard ──HTTP──► FastAPI Backend ──► LangGraph 4-Ag
 | Agent 3 — Capital Allocation | Scores options, decides if approval is needed | Exact formula: `budget_score + availability_score + margin_score + lead_time_penalty` |
 | Agent 4 / Route Node | Pure Python routing | `ESCALATE` (cost > limit) → `AUTO_EXECUTE` (cost < limit) → `SUSPEND` (pool HIGH) |
 
-Key files: `agents/graph.py` (LangGraph state machine), `agents/prompts.py` (4 system prompts), `agents/crew.py` (CrewAI sub-crew), `agents/tools.py` (tool definitions), `agents/llm_factory.py`.
+Key files: `agents/graph.py` (LangGraph state machine), `agents/prompts.py` (4 system prompts), `agents/crew.py` (CrewAI sub-crew), `agents/tools.py` (tool definitions), `agents/llm_factory.py`, `api/models.py` (all Pydantic request/response models).
+
+### `_run_async` bridge
+
+LangGraph nodes are synchronous (`def agent1_node(state)`), but MCP tools are async-only (`ainvoke`). `_run_async(coro)` bridges them: it calls `asyncio.run()` first (Python 3.10+), and falls back to `nest_asyncio` when already inside a running event loop (FastAPI). Each node has one `async def _agentN_fetch()` helper that groups all its MCP calls; the node calls `_run_async(_agentN_fetch(...))` once.
+
+### Tool duplication — `agents/tools.py` vs `mcp_server/server.py`
+
+The same 6 tools are defined in **both** files:
+- `agents/tools.py` — LangChain `@tool` wrappers, used only for standalone testing
+- `mcp_server/server.py` — `@mcp.tool()` registrations, the actual runtime path
+
+When tool logic changes, **both files must be updated**. The agents use the MCP server tools at runtime via `_get_mcp_tools()`; `agents/tools.py` is never imported by the live pipeline.
 
 ## RAG Pipeline (`docs/rag/`)
 
 5 policy documents ingested into ChromaDB (71 chunks total). Retrieval uses hybrid search: BM25 + vector similarity fused with RRF (Reciprocal Rank Fusion), then cross-encoder reranking (BAAI/bge-reranker-v2-m3). Primary embeddings: `nomic-ai/nomic-embed-text-v1.5`; fallback: `all-MiniLM-L6-v2`.
+
+**RAG is unavailable on Windows** due to a path conflict — the API health endpoint will report `"rag": "unavailable (Windows path conflict — resolves on GCP)"`. Agents fall back to LLM knowledge only.
 
 Public API used by agents:
 ```python
@@ -97,16 +120,16 @@ Agents receive a **pre-formatted context string**, not raw chunks.
 
 ## MCP Server (`mcp_server/server.py`)
 
-Exposes 6 tools via MCP stdio protocol. The LangGraph graph connects to it via subprocess — tools are discovered dynamically at runtime, not hardcoded. Tool definitions live in `agents/tools.py`.
+Exposes 6 tools via MCP stdio protocol. The LangGraph graph connects to it via subprocess — tools are discovered dynamically at runtime, not hardcoded. Tool definitions live in `agents/tools.py` (test path) and `mcp_server/server.py` (runtime path).
 
 ## Data Layer (`db/`)
 
-SQLite database at `db/orca.db`. All reads/writes go through `db/queries.py` (clean Python functions, no raw SQL scattered elsewhere). Pipeline execution logs in `db/pipeline_log.py`.
+SQLite database at `db/orca.db`. All reads/writes go through `db/queries.py` (clean Python functions, no raw SQL scattered elsewhere). Pipeline execution logs in `db/pipeline_log.py`. HITL checkpoint state persisted in `db/checkpoints.db` (SqliteSaver).
 
 ## Evaluation Framework (`evals/`)
 
 3 layers:
-- **Layer 1** (`run_retrieval_eval.py`): 11 golden test cases checking `query_for_agent*()` returns correct keywords and doesn't leak wrong-doc content. Target ≥70% pass rate, zero leaks.
+- **Layer 1** (`run_retrieval_eval.py`): 11 golden test cases in `evals/golden_dataset.py` checking `query_for_agent*()` returns correct keywords and doesn't leak wrong-doc content. Target ≥70% pass rate, zero leaks.
 - **Layer 2** (`run_judge_eval.py`): LLM-as-judge for agent decisions — RAG grounding, HITL accuracy, formula correctness, Class-A safety. **Under development.**
 - **Layer 3** (`.github/workflows/eval_gate.yaml`): CI gate runs Layer 1 on every push to main.
 
@@ -116,6 +139,7 @@ SQLite database at `db/orca.db`. All reads/writes go through `db/queries.py` (cl
 2. **No pytest unit tests** (HIGH): `agents/tools.py`, API endpoints, and `db/queries.py` have no unit test coverage.
 3. **Layer 2 LLM-as-judge not built** (HIGH): `evals/run_judge_eval.py` is a stub.
 4. **Layer 1 keyword calibration** (MEDIUM): Golden dataset keywords were written from memory and may not match exact wording in policy docs.
+5. **Hardcoded Windows path** (LOW): `sys.path.append(r"C:/lit")` appears in `agents/graph.py`, `api/main.py`, and `evals/run_retrieval_eval.py` as a litellm workaround. This path does not exist on non-Windows machines and should be made conditional.
 
 ## Deployment
 
