@@ -107,7 +107,7 @@ load_dotenv()
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
- 
+
 from agents.llm_factory import get_llm, get_provider_name, get_model_name
 from agents.prompts import PROMPTS
 from db.queries import (
@@ -510,7 +510,11 @@ def agent1_node(state: AgentState) -> dict:
             active_events      = json.dumps(events_result.get("events", []), indent=2),
             policy_context     = policy_context,
         )
-        response       = llm.invoke(messages)
+        response = llm.with_config({
+            "run_name": f"Agent1-Demand-Fallback | {sku_id}",
+            "tags":     ["agent1", "demand-intelligence", "crew-fallback"],
+            "metadata": {"agent": "demand_intelligence", "sku_id": sku_id, "crew_fallback": True},
+        }).invoke(messages)
         demand_summary = _parse_json(response.content, "Agent 1")
 
 
@@ -617,12 +621,23 @@ def agent2_node(state: AgentState) -> dict:
         policy_context = policy_context,
     )
 
+    _urgency   = state.get("demand_summary", {}).get("urgency", "HIGH")
+    _abc_class = sku_data.get("abc_class", "B")
     logger.info(
         f"Agent 2 calling LLM "
         f"({get_provider_name()}/{get_model_name()})..."
     )
 
-    response = llm.invoke(messages)
+    response = llm.with_config({
+        "run_name": f"Agent2-Supply | {sku_id} | {_urgency}",
+        "tags":     ["agent2", "supply-replenishment", f"urgency:{_urgency}", f"class:{_abc_class}"],
+        "metadata": {
+            "agent":     "supply_replenishment",
+            "sku_id":    sku_id,
+            "urgency":   _urgency,
+            "abc_class": _abc_class,
+        },
+    }).invoke(messages)
     options_package = _parse_json(response.content, "Agent 2")
  
     logger.info(
@@ -713,11 +728,23 @@ def agent3_node(state: AgentState) -> dict:
         policy_context  = policy_context,
     )
  
+    _urgency3   = demand_summary.get("urgency", "HIGH")
+    _abc_class3 = sku_data.get("abc_class", "B")
     logger.info(
         f"Agent 3 calling LLM "
         f"({get_provider_name()}/{get_model_name()})..."
     )
-    response         = llm.invoke(messages)
+    response = llm.with_config({
+        "run_name": f"Agent3-Capital | {sku_id} | pool:{approval_pool}",
+        "tags":     ["agent3", "capital-allocation", f"urgency:{_urgency3}", f"class:{_abc_class3}", f"pool:{approval_pool}"],
+        "metadata": {
+            "agent":         "capital_allocation",
+            "sku_id":        sku_id,
+            "urgency":       _urgency3,
+            "abc_class":     _abc_class3,
+            "approval_pool": approval_pool,
+        },
+    }).invoke(messages)
     capital_decision = _parse_json(response.content, "Agent 3")
  
     logger.info(
@@ -890,7 +917,18 @@ def hitl_node(state: AgentState) -> dict:
         f"({get_provider_name()}/{get_model_name()})..."
     )
 
-    response = llm.invoke(messages)
+    response = llm.with_config({
+        "run_name": f"Agent4-HITL-Briefing | {sku_id} | winner:Option {winner_id}",
+        "tags":     ["agent4", "hitl-briefing", "escalate", f"winner:option-{winner_id.lower()}"],
+        "metadata": {
+            "agent":          "hitl_briefing",
+            "sku_id":         sku_id,
+            "winner_id":      winner_id,
+            "winner_cost_aed": winner_cost_aed,
+            "winner_pool":    winner_pool,
+            "approval_required": capital_decision.get("approval_required", True),
+        },
+    }).invoke(messages)
     briefing = response.content.strip()
 
     if f"Option {winner_id}" not in briefing:
@@ -1241,15 +1279,26 @@ def run_pipeline(sku_id: str, store_id: str) -> dict:
         "final_status":     None,
     }
 
-    config = {"configurable": {"thread_id": pipeline_id}}
+    config = {
+        "configurable": {"thread_id": pipeline_id},
+        "run_name": f"ORCA Pipeline | {sku_id}",
+        "tags": ["orca-pipeline", f"env:{os.getenv('ENVIRONMENT', 'local')}"],
+        "metadata": {
+            "pipeline_id": pipeline_id,
+            "sku_id":      sku_id,
+            "store_id":    store_id,
+            "environment": os.getenv("ENVIRONMENT", "local"),
+        },
+    }
     logger.info(f"Pipeline starting | {pipeline_id}")
 
     final_state = _app.invoke(initial_state, config=config)
 
+    final_status = final_state.get("final_status", "UNKNOWN")
     logger.info(
         f"Pipeline complete | "
         f"{pipeline_id} | "
-        f"status={final_state.get('final_status')}"
+        f"status={final_status}"
     )
     return final_state
 
@@ -1268,7 +1317,12 @@ def resume_pipeline(pipeline_id: str, approved: bool) -> dict:
  
     Returns final state after resumption.
     """
-    config = {"configurable" : {"thread_id": pipeline_id}}
+    config = {
+        "configurable": {"thread_id": pipeline_id},
+        "run_name": f"ORCA Resume | {pipeline_id}",
+        "tags": ["orca-pipeline", "hitl-resume", f"decision:{'approved' if approved else 'rejected'}"],
+        "metadata": {"pipeline_id": pipeline_id, "hitl_decision": "approved" if approved else "rejected"},
+    }
 
     if not approved:
         logger.info(f"Pipeline rejected by human | {pipeline_id}")

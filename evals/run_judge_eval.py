@@ -35,6 +35,39 @@ load_dotenv()
 
 from langchain_groq import ChatGroq
 
+# LangSmith feedback posting — send judge scores back to traces so each
+# pipeline run shows its quality scores inline in the LangSmith UI.
+def _post_feedback_to_langsmith(pipeline_id: str, scores: dict):
+    """
+    Posts judge criterion scores as feedback to the matching LangSmith run.
+    Silently skips if LangSmith tracing is not enabled or run not found.
+    """
+    if os.getenv("LANGCHAIN_TRACING_V2", "false").lower() != "true":
+        return
+    try:
+        from langsmith import Client
+        client = Client()
+        runs = list(client.list_runs(
+            project_name = os.getenv("LANGCHAIN_PROJECT", "orca"),
+            filter       = f'eq(metadata_key("pipeline_id"), "{pipeline_id}")',
+            limit        = 1,
+        ))
+        if not runs:
+            return
+        run_id = str(runs[0].id)
+        for criterion, data in scores.items():
+            score = data.get("score")
+            if score is None:
+                continue
+            client.create_feedback(
+                run_id  = run_id,
+                key     = criterion,
+                score   = round(score / 5, 2),   # normalise 1-5 → 0.0-1.0
+                comment = data.get("reason", ""),
+            )
+    except Exception:
+        pass   # never crash the eval because of LangSmith
+
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "db" / "orca.db"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -201,6 +234,10 @@ def main():
 
         run_records.append(record)
         print("  " + "  ".join(line_parts))
+
+        # post scores back to LangSmith trace for this pipeline run
+        pipeline_id = run["pipeline_id"] if "pipeline_id" in run.keys() else run["sku_id"]
+        _post_feedback_to_langsmith(pipeline_id, record["scores"])
 
     # ── summary per criterion ────────────────────────────────────────────────
     print("=" * 78)
