@@ -1,0 +1,267 @@
+ What's Left to Score 9.5 / 10
+
+  Current: 8.2 — Target: 9.5 — Gap: 1.3 points
+
+  The gap lives in 4 specific areas. Each is actionable and interview-demonstrable.
+
+  ---
+  Area 1 — Production Resilience (currently 6.5 → needs 8.5)
+
+  The single biggest gap a Google engineer will probe.
+
+  1.1 Retry + Exponential Backoff on LLM Calls
+
+  What's missing: If Groq returns 429 (rate limit) or 502 (server error), the pipeline immediately fails with no retry.
+
+  What to build:
+  # agents/llm_factory.py — wrap every LLM call with tenacity
+  from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+  @retry(
+      stop=stop_after_attempt(3),
+      wait=wait_exponential(multiplier=1, min=1, max=10),
+      retry=retry_if_exception_type((RateLimitError, APIConnectionError)),
+  )
+  def call_llm_with_retry(llm, messages):
+      return llm.invoke(messages)
+
+  Interview answer unlocked: "What happens when Groq is down?" → "We retry 3 times with exponential backoff (1s, 2s, 4s). After 3 failures, the pipeline logs FAILED
+  status and the dashboard shows an error. We could also fall back to OpenAI — the llm_factory.py already supports multiple providers, so it's a config change."
+
+  Effort: 2 hours. tenacity is already installed.
+
+  ---
+  1.2 Fallback LLM Provider
+
+  What's missing: Single provider = single point of failure.
+
+  What to build: In llm_factory.py, add a get_llm_with_fallback() that tries Groq first, then OpenAI if Groq raises after retries.
+
+  Effort: 1 hour. The provider switching logic is already there.
+
+  ---
+  1.3 Request Timeout on LLM Calls
+
+  What's missing: A hung Groq request blocks a background thread forever.
+
+  What to build:
+  ChatGroq(
+      model=...,
+      api_key=...,
+      temperature=0,
+      request_timeout=30,  # 30 second hard timeout
+  )
+
+  Effort: 15 minutes. Single line per LLM instantiation.
+
+  ---
+  1.4 API Rate Limiting
+
+  What's missing: Nothing stops 1,000 simultaneous pipeline requests from hitting the API.
+
+  What to build: Add slowapi (1-line FastAPI integration) limiting /api/v1/pipeline/run to 10 requests/minute per IP.
+
+  Effort: 30 minutes.
+
+  ---
+  Area 2 — Testing Depth (currently 7 → needs 8.5)
+
+  54 unit tests are good. Google wants to see integration tests too.
+
+  2.1 FastAPI Integration Tests (highest value)
+
+  What's missing: Zero tests for the API layer. No test confirms that POST /pipeline/run returns 202, or that POST /pipeline/run with an invalid SKU returns 422.
+
+  What to build: tests/test_api.py using FastAPI's TestClient:
+  from fastapi.testclient import TestClient
+  from api.main import app
+
+  client = TestClient(app)
+
+  def test_invalid_sku_returns_422():
+      resp = client.post("/api/v1/pipeline/run",
+                         json={"sku_id": "NONEXISTENT", "store_id": "ST001"})
+      assert resp.status_code == 422
+
+  def test_health_returns_200():
+      resp = client.get("/health")
+      assert resp.status_code == 200
+
+  def test_alerts_returns_list():
+      resp = client.get("/api/v1/alerts")
+      assert resp.status_code == 200
+      assert isinstance(resp.json(), list)
+
+  Effort: 3 hours. No LLM calls — uses TestClient which mocks everything.
+
+  ---
+  2.2 Agent 3 Formula Compliance Test (crown jewel)
+
+  What's missing: The 54 tests verify the formula in pure Python. They do NOT verify that the LLM actually applies the formula correctly.
+
+  What to build: A single test that calls the real Agent 3 prompt with known synthetic inputs and asserts the output matches expected scores within tolerance:
+  # tests/test_agent3_compliance.py
+  # Feeds known inputs to the real LLM, checks output is within tolerance
+  # Run with: pytest tests/test_agent3_compliance.py --groq-key=...
+
+  This is what Google calls "model evaluation integrated into CI" — the holy grail for AI systems. Even a single test case with known expected output is enough.
+
+  Effort: 3 hours. Needs GROQ_API_KEY at test time (mark as @pytest.mark.integration).
+
+  ---
+  2.3 HITL Pause/Resume Test
+
+  What's missing: No test that the graph actually pauses on ESCALATE and resumes correctly.
+
+  What to build: A test that runs a minimal pipeline with a mocked LLM that always returns approval_required=True, verifies the graph pauses, then resumes it and
+  verifies the final state.
+
+  Effort: 2 hours.
+
+  ---
+  Area 3 — Observability Depth (currently 8.5 → needs 9.5)
+
+  LangSmith gives trace observability. What's missing is operational metrics.
+
+  3.1 Custom Metrics Endpoint
+
+  What's missing: No way to answer "what's the ESCALATE rate over the last 7 days?" or "what's avg pipeline latency?"
+
+  What to build: A /api/v1/metrics endpoint that reads from pipeline_log and returns:
+  {
+    "total_runs_24h": 47,
+    "escalate_rate": 0.34,
+    "auto_execute_rate": 0.51,
+    "suspend_rate": 0.15,
+    "avg_pipeline_latency_s": 42.3,
+    "hitl_pending_count": 3
+  }
+
+  All data is already in pipeline_log. This is 20 SQL queries and a JSON response.
+
+  Interview answer unlocked: "How do you monitor ORCA in production?" → "We have LangSmith for per-run traces and latency, plus a /metrics endpoint that shows ESCALATE
+  rate, AUTO_EXECUTE rate, and HITL queue depth over time. We'd feed this into Grafana in production."
+
+  Effort: 2 hours.
+
+  ---
+  3.2 Dependency Health Check
+
+  What's missing: The /health endpoint only returns {"status": "ok"}. It doesn't actually validate that Groq, ChromaDB, and SQLite are reachable.
+
+  What to build:
+  @app.get("/health")
+  async def health():
+      return {
+          "status": "ok",
+          "groq": _check_groq(),           # try a 1-token completion
+          "chromadb": _check_chromadb(),    # retriever.is_available()
+          "sqlite": _check_sqlite(),        # SELECT 1 from pipeline_log
+          "pending_hitl": _count_pending(),
+      }
+
+  Effort: 1 hour.
+
+  ---
+  Area 4 — Architecture Documentation (currently implicit → needs explicit)
+
+  Google system design interviews test whether you can articulate WHY you made decisions. ADRs are the proof.
+
+  4.1 Architecture Decision Records (5 ADRs)
+
+  What's missing: No written record of why key decisions were made. In interviews, you'll be asked "why LangGraph over plain LangChain?" and you need a crisp answer.
+
+  What to build: docs/adr/ with 5 files:
+
+  ┌─────────┬─────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │   ADR   │                Decision                 │                                         What to explain                                         │
+  ├─────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ ADR-001 │ LangGraph over plain LangChain          │ Deterministic state machine, HITL interrupt, checkpoint resumption — can't do these with chains │
+  ├─────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ ADR-002 │ MCP tools over direct DB calls          │ Dynamic tool discovery — add new tool to server.py without touching graph.py                    │
+  ├─────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ ADR-003 │ Groq RAGAS metrics over RAGAS library   │ ragas package hard-imports Vertex AI class that conflicts with LangChain version                │
+  ├─────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ ADR-004 │ Pre-built ChromaDB index in CI          │ docling + einops too heavy for CI runner; 50MB index vs 500MB model download                    │
+  ├─────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ ADR-005 │ HITL keyed on cost > auto_approve_limit │ Business rule, not model decision — routing is pure Python, never hallucinates                  │
+  └─────────┴─────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  Each ADR is 10-15 lines: Context → Decision → Consequences. These are gold in system design interviews — you've already done the thinking, just write it down.
+
+  Effort: 2 hours of writing.
+
+  ---
+  Priority Order (if you only have one day)
+
+  ┌──────────┬──────────────────────────────┬────────┬───────────────────────────────────────────────┐
+  │ Priority │             Item             │ Effort │               Interview Impact                │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 1        │ Retry + backoff on LLM calls │ 2h     │ Eliminates the "what if Groq is down?" gap    │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 2        │ FastAPI integration tests    │ 3h     │ Shows engineering discipline at the API layer │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 3        │ /metrics endpoint            │ 2h     │ Unlocks the "how do you monitor this?" answer │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 4        │ ADRs (5 documents)           │ 2h     │ System design interview prep done in writing  │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 5        │ Dependency health check      │ 1h     │ Makes health endpoint meaningful              │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 6        │ Request timeout on LLM       │ 15min  │ Prevents hung threads                         │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 7        │ Fallback LLM provider        │ 1h     │ Eliminates single point of failure            │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 8        │ API rate limiting            │ 30min  │ Shows API design maturity                     │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 9        │ Agent 3 compliance test      │ 3h     │ The "proof the LLM does what we say" test     │
+  └──────────┴──────────────────────────────┴────────┴───────────────────────────────────────────────┘
+
+  Total: ~14 hours of work → 9.5/10
+
+  ---
+  What 9.5 Sounds Like in the Interview
+
+  "Walk me through your monitoring strategy."
+
+  ▎ "Three layers: LangSmith for per-agent traces (latency, tokens, inputs/outputs). A /metrics endpoint for operational metrics (ESCALATE rate, HITL queue, avg latency)
+  ▎ that feeds into Grafana. And a 3-layer eval suite that runs on every push — retrieval quality, RAGAS grounding scores, and LLM-as-judge on real decisions. If any
+  ▎ layer degrades, the CI gate blocks the merge."
+
+  "What happens when your LLM provider goes down?"
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 4        │ ADRs (5 documents)           │ 2h     │ System design interview prep done in writing  │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 5        │ Dependency health check      │ 1h     │ Makes health endpoint meaningful              │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 6        │ Request timeout on LLM       │ 15min  │ Prevents hung threads                         │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 7        │ Fallback LLM provider        │ 1h     │ Eliminates single point of failure            │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 8        │ API rate limiting            │ 30min  │ Shows API design maturity                     │
+  ├──────────┼──────────────────────────────┼────────┼───────────────────────────────────────────────┤
+  │ 9        │ Agent 3 compliance test      │ 3h     │ The "proof the LLM does what we say" test     │
+  └──────────┴──────────────────────────────┴────────┴───────────────────────────────────────────────┘
+
+  Total: ~14 hours of work → 9.5/10
+
+  ---
+  What 9.5 Sounds Like in the Interview
+
+  "Walk me through your monitoring strategy."
+
+  ▎ "Three layers: LangSmith for per-agent traces (latency, tokens, inputs/outputs). A /metrics endpoint for operational metrics (ESCALATE rate, HITL queue, avg latency)
+  ▎ that feeds into Grafana. And a 3-layer eval suite that runs on every push — retrieval quality, RAGAS grounding scores, and LLM-as-judge on real decisions. If any
+  ▎ layer degrades, the CI gate blocks the merge."
+
+  "What happens when your LLM provider goes down?"
+
+  ▎ "Groq calls have a 30-second timeout and retry 3 times with exponential backoff using tenacity. After 3 failures, the pipeline fails gracefully and the dashboard
+  ▎ shows FAILED. The llm_factory already supports OpenAI as a secondary provider — it's a one-line config change to enable the fallback."
+
+  "How do you know Agent 3's scoring formula is correct?"
+
+  ▎ "Two ways: 54 unit tests in Python that implement the formula and verify it for known inputs, including edge cases like division by zero on margin_rank=0 and the
+  ▎ CRITICAL urgency penalty boundary. And a compliance test that feeds known synthetic inputs to the real Agent 3 LLM call and asserts the output matches expected
+  ▎ scores within 5% tolerance. Both run in CI on every merge."
+
+  That's the difference between 8.2 and 9.5.

@@ -1,0 +1,53 @@
+rerate bro                                                                                                                                                             
+
+● 8.2 / 10 — up from 6.8.
+
+  Here's the updated breakdown:
+
+  ┌──────────────────────┬────────┬────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │      Dimension       │ Before │ After  │                                            What changed                                            │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Architecture         │ 9/10   │ 9/10   │ Unchanged — was already strong                                                                     │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ AI/ML depth          │ 8/10   │ 9/10   │ CrewAI end-to-end working, Agent 4 briefing fixed, classa_safety judge correct                     │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Code quality         │ 6/10   │ 7.5/10 │ threading.Lock, SKU validation, JSON self-healing, SqliteSaver                                     │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Production-readiness │ 5/10   │ 6.5/10 │ Persistent checkpoints, locking — still no retry/circuit breaker                                   │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Observability        │ 6/10   │ 8.5/10 │ Full LangSmith — per-agent spans, eval scores posted back to traces, all 3 eval files traced       │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Evaluation framework │ 8/10   │ 9/10   │ 3-layer CI gate, RAGAS routed correctly, composite enforced on every push, feedback loop to traces │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Testing              │ 1/10   │ 7/10   │ 54 unit tests, scoring formula locked, routing matrix parametrized, runs in CI                     │
+  ├──────────────────────┼────────┼────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Overall              │ 6.8    │ 8.2    │                                                                                                    │
+  └──────────────────────┴────────┴────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  What's still keeping it from 9+
+
+  Three things a senior Google engineer would still probe:
+
+  1. No retry/fallback on Groq (single point of failure)
+  If Groq is down, every pipeline fails. No exponential backoff, no secondary provider. "What's your availability story?" — you can't answer this well yet.
+
+  2. SqliteSaver is single-instance only
+  Better than MemorySaver, but still breaks in a multi-worker or multi-pod deployment. Render runs one instance so it's fine for now, but you can't claim horizontal
+  scalability.
+
+  3. No operational metrics
+  LangSmith is observability for debugging. You still have zero SLA metrics — ESCALATE rate over time, avg pipeline latency, HITL approval time, cost per decision.
+  Google specifically asks "how would you monitor this in production?"
+
+  ---
+  What's genuinely impressive at 8.2
+
+  For a senior AI/ML role, this is a top-tier portfolio project. Most candidates have:
+  - A RAG chatbot with no evals → you have 3-layer CI-gated evals
+  - A single LLM call → you have 4-agent pipeline with HITL
+  - No tests → you have 54 unit tests locking business logic
+  - No observability → you have LangSmith per-agent traces with eval feedback
+
+  The architecture story (LangGraph + MCP + hybrid RAG + CrewAI + HITL + eval framework) is genuinely unique. Most Google interviewers haven't seen a portfolio project
+  at this level.

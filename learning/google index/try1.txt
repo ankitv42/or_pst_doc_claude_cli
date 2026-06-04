@@ -1,0 +1,161 @@
+---
+  Current Rating: 6.8 / 10 for Google Interview
+
+  Not the number you want to hear, but here's why — and more importantly, what closes the gap.
+  
+  ---
+  What's Genuinely Strong ✅
+
+  These you can speak to confidently in an interview:
+
+  1. Architecture is Interview-Grade
+  - LangGraph state machine with interrupt_before=["execute_node"] — the HITL pause happens before writeback, not after. That's a safety-critical design decision you can
+  defend.
+  - Background task + polling pattern (FastAPI returns 202 immediately, dashboard polls every 3s) — this is the exact pattern used at Uber, Airbnb for long-running
+  operations
+  - MCP tool discovery via subprocess — tools discovered dynamically at runtime, graph.py never hardcodes tool names
+
+  2. RAG Pipeline is Genuinely Sophisticated
+  - Hybrid BM25 + vector search fused with RRF — you hand-coded BM25Index from scratch (not sklearn), which shows you understand the math
+  - BGE cross-encoder reranking (BAAI/bge-reranker-v2-m3)
+  - Corrective RAG — if top chunk score < 0.35 threshold, re-queries with domain-expanded terms
+  - Per-agent retrieval functions (query_for_agent1..4) — each agent gets task-specific context
+
+  3. JSON Self-Healing
+  The _parse_json() function strips markdown fences, then on JSONDecodeError asks the LLM to fix its own output. Two-attempt recovery before giving up. Proper fallback
+  logging.
+
+  4. CrewAI Graceful Fallback
+  If the 3-agent crew fails, pipeline continues with single LLM call. confidence_score=0.5 in the fallback transparently signals degraded quality. The pipeline never
+  crashes because Agent 1 fails.
+
+  5. Pydantic Validation at API Boundary
+  State from graph.py (plain dicts) is converted to typed Pydantic models before API responses. Type casting handled (str(o.get("id"))). None-safe throughout.
+
+  6. Eval Framework (Genuinely Rare)
+  Most portfolio projects have zero evals. You have 3 layers, LLM-as-judge, RAGAS-style metrics, composite gate, CI enforcement. This is specifically what Google looks
+  for in AI/ML roles.
+
+  ---
+  Critical Gaps — What a Google Engineer Will Probe ❌
+
+  Gap 1 — MemorySaver is a Demo-Only Component (HIGH)
+
+  checkpointer = MemorySaver()   # line 1240, graph.py
+  Every ESCALATED pipeline paused for human approval lives in RAM. Server restart = all pending $500k orders gone. A Google interviewer will ask: "What happens to
+  ESCALATED pipelines when your server restarts?"
+
+  Fix: 2-line change — swap to SqliteSaver or PostgresSaver.
+
+  ---
+  Gap 2 — No Tests on the Core Business Rule (HIGH)
+
+  The Agent 3 scoring formula is defined in a prompt string:
+  budget_score = (1 - cost/available_budget) × 40
+  There is no single test that feeds known inputs and verifies the output. If the LLM drifts or miscomputes, you won't know. A Google engineer will ask: "How do you know
+  Agent 3's formula is correct?" — and you have no answer.
+
+  Fix: 10 lines of pytest in tests/test_scoring.py.
+
+  ---
+  Gap 3 — Thread-Unsafe In-Memory Store (HIGH)
+
+  _pipeline_store: dict[str, dict] = {}   # api/main.py line 120
+  Plain Python dict with no locking. FastAPI runs requests concurrently. If two requests touch the same pipeline_id simultaneously, one update is silently lost. "What's
+  your race condition story?"
+
+  Fix: threading.Lock() wrapper or Redis.
+
+  ---
+  Gap 4 — No Input Validation Beyond Type Checking (MEDIUM)
+
+  async def run_pipeline_endpoint(body: RunPipelineRequest, ...):
+      pipeline_id = f"PIPE_{body.sku_id}_..."
+  Pydantic checks sku_id is a string. It doesn't check it exists in the DB. A garbage SKU flows into 4 LLM calls, MCP fetches, and a pipeline log entry — all producing
+  garbage. "What happens if an invalid SKU is submitted?"
+
+  Fix: One DB lookup before launching the background task.
+
+  ---
+  Gap 5 — Single Point of Failure on Groq (MEDIUM)
+
+  No retry logic. No exponential backoff. No fallback provider. If Groq returns 502, every pipeline in flight fails simultaneously. "What's your strategy if your LLM
+  provider goes down?"
+
+  Fix: Exponential backoff wrapper around LLM calls, or configure OpenAI as fallback in llm_factory.py.
+
+  ---
+  Gap 6 — No Operational Metrics (MEDIUM)
+
+  LangSmith gives you traces. But you have zero:
+  - Decision latency by agent (p50, p95, p99)
+  - ESCALATE rate over time
+  - Formula drift detection
+  - HITL approval turnaround time
+  - Cost per pipeline run (tokens × price)
+
+  "What's your SLA for pipeline execution? How would you know if it degrades?"
+
+  ---
+  Gap 7 — BM25 Cache is Per-Instance (LOW but notable)
+
+  self._bm25_cache: dict[str, BM25Index] = {}
+  In a k8s deployment with 10 pods, each builds and caches BM25Index independently. 10× memory consumption. A senior Google engineer will catch this if you claim
+  "production-ready."
+
+  ---
+  Score Breakdown
+
+  ┌──────────────────────┬────────┬────────────────────────────────────────────────────────────────────┐
+  │      Dimension       │ Score  │                               Notes                                │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ Architecture         │ 9/10   │ LangGraph, MCP, RAG — all right choices, well-reasoned             │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ AI/ML depth          │ 8/10   │ Hybrid RAG, RRF, reranking, CrewAI, HITL — genuinely sophisticated │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ Code quality         │ 6/10   │ Good patterns, but no tests, no locking, weak error handling       │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ Production-readiness │ 5/10   │ MemorySaver, no retry, no circuit breaker, dict store              │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ Observability        │ 6/10   │ LangSmith done, but zero operational metrics                       │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ Evaluation framework │ 8/10   │ Very rare in portfolios — strong differentiator                    │
+  ├──────────────────────┼────────┼────────────────────────────────────────────────────────────────────┤
+  │ Overall              │ 6.8/10 │                                                                    │
+  └──────────────────────┴────────┴────────────────────────────────────────────────────────────────────┘
+
+  ---
+  What Closes the Gap to 8.5+
+
+  Do these 3 things — total effort ~1 day:
+
+  ┌─────────────────────────────────────────────┬──────────┬─────────────────────────────────────────────────────────┐
+  │                     Fix                     │  Effort  │                    Interview Impact                     │
+  ├─────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────┤
+  │ Swap MemorySaver → SqliteSaver              │ 2 lines  │ Eliminates the "server restart" question                │
+  ├─────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────┤
+  │ Add tests/test_scoring.py (Agent 3 formula) │ 30 lines │ Eliminates the "how do you know it's correct?" question │
+  ├─────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────┤
+  │ Add threading.Lock() to _pipeline_store     │ 5 lines  │ Eliminates the race condition question                  │
+  ├─────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────┤
+  │ Add SKU validation before pipeline launch   │ 10 lines │ Shows API design maturity                               │
+  └─────────────────────────────────────────────┴──────────┴─────────────────────────────────────────────────────────┘
+
+  The eval framework and LangSmith observability you already have are what most portfolios DON'T have. Fix the 3 items above and you're at 8+ for a Google AI/ML engineer
+  role. The architecture story is already excellent.
+
+  ---
+  What to Say in the Interview
+
+  Lead with: "ORCA is an autonomous inventory management system built on LangGraph with a 4-agent pipeline, hybrid RAG retrieval, and a 3-layer evaluation framework with
+  CI gates." — that sentence alone is better than most portfolios.
+
+  Be ready for: "Walk me through how the HITL mechanism works" — you can explain interrupt_before, MemorySaver checkpoints, and resume_pipeline in detail.
+
+  Prepare an honest answer for: "What would you change for true production?" — MemorySaver → SqliteSaver, Redis for pipeline store, retry logic on LLM calls, operational
+  metrics. Showing you know the gaps is as impressive as not having them.
+
+✻ Cooked for 2m 23s
+
+※ recap: Building ORCA, an AI inventory pipeline, for Google interview prep. LangSmith is now integrated and being tested live. Next: swap MemorySaver to SqliteSaver and
+  add Agent 3 scoring unit tests to close the biggest interview gaps.
