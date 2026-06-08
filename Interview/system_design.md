@@ -50,6 +50,17 @@ If the API blocked for 90 seconds, the user's browser would freeze or time out. 
 *"When an expensive order needs approval, the system pauses. How does it hold that state while waiting — potentially for hours — for a human to click Approve?"*
 
 ### Strong Answer
+There are two separate concepts working together: the checkpointer (saves state after every node) and interrupt_before (speed bump that pauses the graph.)
+
+checkpointer=SqliteSaver(...) — after every node runs, LangGraph automatically saves the full AgentState dict to db/checkpoints.db, keyed by thread_id. Think of it like Git — every node is a commit.
+
+interrupt_before=["execute_node"] — LangGraph places a speed bump: before execute_node ever runs, the graph freezes and returns. This is a built-in LangGraph feature. One line. No custom pause logic needed.
+
+The system pauses using LangGraph interrupts, saves the whole workflow state using checkpointing, waits for human input, and then resumes from that checkpoint when the user approves or rejects. This makes long-running human-in-the-loop workflows reliable, even across server restarts.
+
+thread_id is the lookup key for checkpoints. Every node's saved state is stored under "PIPE_SKU00090_2026-06-05". This is how resume_pipeline() later finds the
+  paused state — same key.
+
 The system uses LangGraph's **interrupt + checkpoint** mechanism:
 
 ```
@@ -205,6 +216,85 @@ This shows awareness of decoupling and extensibility — a Fortune 100 productio
 - Can't explain that MCP runs as a **stdio subprocess** (not HTTP), so no port needed
 - Unaware that tools are async-only via MCP adapters (requires `ainvoke`, not `invoke`)
 
+### Gyan
+stdio subprocess — a completely different model
+
+  stdio stands for standard input / standard output. Every program has three built-in streams:
+  - stdin — the pipe data comes IN through (keyboard, by default)
+  - stdout — the pipe data goes OUT through (terminal, by default)
+  - stderr — for errors
+
+  When you run python mcp_server/server.py from a terminal, it reads from stdin and writes to stdout. In the subprocess model, your Python code IS the terminal — it
+  spawns the server as a child process, and they talk by writing/reading bytes through those pipes directly. No network. No port. No OS routing needed.
+
+   Your code (graph.py)          mcp_server/server.py
+       │                               │
+       │  spawns as child process      │
+       ├──────────────────────────────►│
+       │                               │  (running in memory, no port)
+       │  writes JSON to child's stdin │
+       ├──────────────────────────────►│
+       │                               │  processes request
+       │  reads JSON from child stdout │
+       ◄───────────────────────────────│
+
+MCP_CLIENT_CONFIG = {
+      "orca_inventory": {
+          "transport": "stdio",      # ← not "http"
+          "command": "python",       # ← launch this executable
+          "args": [MCP_SERVER_PATH]  # ← with this script as argument
+      }
+  }
+
+  MultiServerMCPClient reads this config and literally runs python mcp_server/server.py as a subprocess. Then it writes discovery requests to that process's stdin
+  and reads tool definitions back from its stdout. No URL. No port. The OS connects them directly through in-memory pipes.
+
+  MCP tools async-only, but Langchain nodes are synchronous. We typically can't do:
+  
+  def agent1_node(state):          # sync — no await allowed
+      result = await tool.ainvoke(...)  # ERROR — can't await in a sync function
+  solution is a bridge function:
+
+  await is only valid inside an async def. LangGraph forces nodes to be plain def. MCP tools only have ainvoke. These two requirements are in direct conflict. You
+  cannot resolve this with better code style or a smarter library call — it is a language-level wall.
+
+  What _run_async does — the actual value
+
+  It creates a new event loop on the spot, runs the async code to completion inside it, and returns the result as a plain value — which a def function can receive
+  normally.
+
+  def _run_async(coro):
+      try:
+          return asyncio.run(coro)   # ← creates loop, runs async code, destroys loop, returns result
+      except RuntimeError:
+          import nest_asyncio
+          nest_asyncio.apply()
+          return asyncio.get_event_loop().run_until_complete(coro)
+
+  From the node's perspective, nothing async happened. It called a function, got a value back. The sync/async boundary was crossed and sealed.
+
+  ---
+  The second value — the FastAPI edge case (the except block)
+
+  This is the part interviewers probe. Why is there a try/except?
+
+  asyncio.run() creates a fresh event loop. But FastAPI already has a running event loop managing all your HTTP requests. When _run_pipeline_task() runs inside
+  FastAPI's thread pool, calling asyncio.run() fails with:
+
+  RuntimeError: This event loop is already running
+
+  The fallback uses nest_asyncio, which patches the existing loop to allow nesting. Without this second branch, the pipeline works from python agents/graph.py but
+  silently crashes when called from FastAPI — a production-only bug that wouldn't show up in local testing.
+
+  How to say it to an interviewer
+
+  ▎ "LangGraph nodes are synchronous by design — they're plain def functions. But MCP tools are async-only because they do pipe I/O. These two requirements create a
+  ▎ language-level conflict: await is a syntax error inside def. _run_async resolves this by spinning up a temporary event loop, running all the async work inside
+  ▎ it, and returning a plain result. There's a second branch for when we're running inside FastAPI — it already has a running event loop, so we can't create a new
+  ▎ one; nest_asyncio patches the existing loop to allow nesting. And to avoid creating and destroying an event loop multiple times per node, we group all MCP calls
+  ▎ into one async helper function and cross the bridge exactly once."
+
+
 ---
 
 ## Q6 — How does the system handle an AI agent returning broken or invalid JSON?
@@ -255,6 +345,31 @@ In production AI systems, you cannot assume the LLM always returns perfectly for
 - No awareness of the retry / self-correction pattern
 
 ---
+
+### Gyan
+
+How to say it to an interviewer
+
+  ▎ "The system has two layers of JSON error handling. First, it strips markdown formatting artifacts that LLMs inject around JSON. Second, if parsing still fails, it sends the broken output back to the LLM with a targeted
+  ▎ repair prompt. This is a reasonable pattern for a prototype. At scale, FAANG teams eliminate the problem upstream — either with JSON mode which constrains the model's token generation, or with Pydantic schema parsing which
+  ▎ validates structure and field types immediately. The self-repair approach here works but adds one extra LLM call per failure, which costs latency and money. The better fix for this specific codebase would be to add
+  ▎ .bind(response_format={"type": "json_object"}) to the LLM call — Groq supports it and it removes the parse failure case entirely."
+      response_format={"type": "json_object"}
+  )
+  The model is constrained at inference time — it literally cannot produce invalid JSON. No parse step needed. Groq supports this too.
+
+  Option B — Pydantic schema enforcement (what FAANG uses)
+  from langchain_core.output_parsers import PydanticOutputParser
+
+  class DemandSummary(BaseModel):
+      urgency: Literal["CRITICAL", "HIGH", "MEDIUM"]
+      projected_shortfall: float
+      lead_time_too_late: bool
+
+  parser = PydanticOutputParser(pydantic_object=DemandSummary)
+  chain  = prompt | llm | parser  # parse + validate in one step
+
+  The LLM output is parsed AND validated against the schema in one shot. If urgency comes back as "URGENT" instead of "CRITICAL", Pydantic rejects it immediately with a clear error — not after it's already flowed into Agent 2.
 
 ## Q7 — The routing decision is "pure Python, no LLM". Why?
 
@@ -365,6 +480,34 @@ This fires 3 targeted queries:
               ▼
     Formatted context string injected into Agent 3's prompt
 ```
+---
+What to say to the interviewer — the full answer
+
+  Start with the architecture, then go deep on any part they probe.
+
+  Layer 1 — Ingestion (ingest.py)
+
+  ▎ "I don't use naive text splitting. I use Docling from IBM to parse PDFs — it preserves table structure, section hierarchy, heading paths, and page numbers. Then HybridChunker splits at section boundaries and sizes chunks to
+  ▎ the embedding model's token limit. Each chunk gets rich metadata: doc_type, element_type (text/table/heading), section_name, heading_path, and a generated chunk_summary. The vectors go into ChromaDB with cosine similarity."
+
+  Layer 2 — Retrieval (retriever.py) — this is the meaty part
+
+  Walk through the pipeline step by step:
+
+  Query Construction (no generic query but Each agent calls a dedicated method — query_for_agentN(), query_for_agent2(), etc. — with structured state data, method  constructs 2–3 targetedkeyword queries)
+        ↓
+  Hybrid Retrieval (Vector + BM25) (Vercor for semantic search, BM25 for keyword seach both parallel )
+        ↓
+  RRF Fusion       (results are merged by RECIPROCAL RANK FUSION, combined score generated for chunks)
+        ↓
+  BGE Cross-Encoder Reranking (After RRF I have 10 candidate chunks. A bi-encoder gives me 10 candidates fast — but it encoded the query and chunk separately, so it      misses                       fine-grained relevance. A cross-encoder reads the query and chunk together in one
+  ▎                            forward pass, which is far more accurate.)
+        ↓
+  Corrective RAG (auto-retry)   ("If the top chunk's RRF score is below 0.35, the query probably wasn't specific enough. Instead of returning low-confidence results, I retry                         with query expansion — I append domain vocabulary: category names, urgency levels,
+  ▎                           pool IDs, event names. If the retry scores better, I return those results instead. This is the CRAG pattern — Corrective RAG)
+        ↓
+  Formatted context string → LLM prompt
+---
 
 ### Why It Matters
 Generic RAG (one query per agent) retrieves noise. Query construction from structured state data — called **metadata-aware targeted retrieval** — is a production RAG technique.
@@ -373,6 +516,8 @@ Generic RAG (one query per agent) retrieves noise. Query construction from struc
 - Thinks all agents use the same query function
 - Unaware of hybrid search (BM25 + vector) — just "ChromaDB does similarity search"
 - Can't explain what RRF fusion is (Reciprocal Rank Fusion — merges ranked lists from two retrieval methods)
+
+---
 
 ---
 
@@ -428,6 +573,31 @@ The candidate demonstrates awareness of multiple AI frameworks and, more importa
 - Thinks LangGraph and CrewAI are competitors (they're complementary)
 
 ---
+### Q. Why Crew Ai needed in Agent 1 . why can't go with agent 1 as langgraph agent?
+
+Why a single LangGraph node cannot replace CrewAI inside Agent 1
+
+  Demand forecasting has three distinct cognitive jobs that benefit from true role separation:
+
+  Agent A (Data Analyst) — calls tools, reports numbers
+      get_positions_tool("SKU00090") → 5 critical stores, 0.7 days cover
+      get_velocity_tool("SKU00090")  → avg 4.2 units/day, trend rising 8%
+
+  Agent B (Market Analyst) — interprets context
+      Dubai Shopping Festival → 90% Electronics uplift
+      lead_time = 54.5 days, planning window = 80 days → lead_time_too_late = True
+
+  Agent C (Forecast Strategist) — reads A and B, synthesizes
+      CRITICAL urgency (>5 critical stores AND lead_time_too_late)
+      confidence_score = 0.91 (both data sources coherent)
+      crew_insights = "DSF uplift and supply constraint compound risk"
+
+  If you collapsed this into a single LangGraph node with one LLM call, you'd ask one model to simultaneously call tools, interpret event data, apply policy rules, and synthesize them — context
+  interference. The role separation improves output quality. Agent B has max_iter=3; Agent A has max_iter=5 because it does tool calls. You can tune each independently.
+
+  And if CrewAI fails — which it currently does on every run due to the cache_breakpoint bug — the fallback at graph.py:503–520 catches it and the pipeline continues with a single LLM call. LangGraph
+  never crashed. The outer workflow is resilient to the inner collaboration failing.
+---
 
 ## Q11 — How is thread safety handled in the in-memory pipeline store?
 
@@ -469,6 +639,333 @@ Concurrency bugs are among the hardest to reproduce and debug. Recognising where
 
 ---
 
+
+● Start from zero — what is a thread
+
+  Your computer's CPU executes instructions one at a time. But modern programs need to do multiple things at once — serve a web request AND run a 90-second AI pipeline at the same time. Threads are
+  how one process does multiple things simultaneously.
+
+  Think of it like a restaurant kitchen.
+
+  One chef (single thread):
+
+  In your codebase, FastAPI is Chef 1. When someone hits POST /pipeline/run, Chef 1 doesn't cook — he hands the work to a background thread and immediately comes back to serve the next request. That's
+  what background_tasks.add_task(...) does at api/main.py:712–717.
+
+  ---
+  The problem threads create — the race condition
+
+  Now two chefs share one whiteboard (_pipeline_store dict). Both reach for the marker at the exact same moment.
+
+  Thread 1 (pipeline SKU00090):   reads store → "status": "RUNNING"
+  Thread 2 (pipeline SKU00041):   reads store → "status": "RUNNING"
+
+  Thread 1: writes "final_status": "AUTO_EXECUTED"
+  Thread 2: writes "final_status": "ESCALATED"   ← OVERWRITES Thread 1's write
+
+  Result: one pipeline's status gets silently corrupted. No error. No warning. Data just wrong. This is called a race condition — the result depends on which thread "races" to write first.
+
+  Python dicts are not thread-safe. Two threads writing to the same dict at the same time can corrupt it.
+
+  ---
+  How this codebase handles it — threading.Lock()
+
+  api/main.py:122–136:
+
+  _pipeline_store: dict[str, dict] = {}
+  _store_lock = threading.Lock()        # ← one lock for the whole dict
+
+  def _store_update(pipeline_id: str, **kwargs):
+      with _store_lock:                 # ← only ONE thread can be inside here at a time
+          if pipeline_id not in _pipeline_store:
+              _pipeline_store[pipeline_id] = {}
+          _pipeline_store[pipeline_id].update(kwargs)
+          _pipeline_store[pipeline_id]["last_updated"] = _now()
+
+  A Lock is like a toilet with one key. with _store_lock: means:
+
+  Thread 1 arrives → picks up key → enters → writes → leaves → puts key back
+  Thread 2 arrives → key is gone → WAITS → key returned → enters → writes
+
+  They never write simultaneously. No corruption.
+
+  Notice: every write to _pipeline_store goes through _store_update(). The GET endpoints read directly (_pipeline_store.get(pipeline_id)) — that's acceptable because Python's GIL (Global Interpreter
+  Lock) makes dict reads safe. Only concurrent writes are dangerous.
+
+  ---
+  What Google can ask — and the exact answers
+
+  Q1: "What's the difference between a thread and a process?"
+
+  ▎ A process is a fully isolated program with its own memory — if it crashes, others are unaffected. A thread lives inside a process and shares its memory. Threads are lightweight and fast to create,
+  ▎ but sharing memory means you need synchronization. In this codebase, FastAPI and all background pipeline tasks are threads inside one process — they share _pipeline_store.
+
+  Q2: "What is a race condition? Give a concrete example from your code."
+
+  ▎ Two threads calling _store_update() on different pipelines simultaneously without the lock could interleave their dictionary writes and corrupt each other's entries. The lock serializes all writes
+  ▎ so only one thread modifies _pipeline_store at a time.
+
+  Q3: "What's a deadlock?"
+
+  ▎ When Thread A holds Lock 1 and waits for Lock 2, while Thread B holds Lock 2 and waits for Lock 1 — they wait forever. This codebase avoids it by having only one lock (_store_lock) that only
+  ▎ protects one resource. You can only get a deadlock when you have multiple locks.
+
+  Q4: "Why use a Lock instead of just making _pipeline_store a thread-safe data structure?"
+
+  ▎ Python has queue.Queue which is thread-safe, but it's a queue, not a dict. There's no thread-safe dict in Python's standard library. threading.Lock wrapping a regular dict is the standard pattern
+  ▎ — it's explicit, readable, and gives you control over which operations are atomic.
+
+
+  Q5: "What would you change for production at Google scale?"
+
+  ▎ Two things. First, a single process with threads doesn't scale horizontally — if you run three API instances (three processes), they each have their own _pipeline_store and don't share state. The
+  ▎ fix is Redis: a single shared store that all instances read and write. The code even has a comment at api/main.py:29: "In Sprint 5 this upgrades to Redis." Second, threading.Lock is blocking — a
+  ▎ thread that can't acquire the lock just waits. For very high concurrency you'd prefer asyncio.Lock in an async context, or Redis's atomic operations which avoid the locking problem entirely.
+
+  Q6: "What is the GIL and how does it affect your code?"
+
+  ▎ Python's Global Interpreter Lock means only one thread executes Python bytecode at a time, even on multi-core machines. This makes pure-Python operations like dict reads effectively safe without a
+  ▎ lock. But the GIL releases during I/O — LLM API calls, DB reads — so two threads can run Python concurrently during those periods. That's exactly when the race condition on _pipeline_store writes
+  ▎ can happen, which is why the Lock is still needed even though Python has the GIL.
+
+  ---
+  The one-paragraph summary for the interview
+
+  ▎ "The in-memory pipeline store is a plain Python dict shared across all threads — the FastAPI event loop thread, background pipeline threads, and the approve endpoint. Plain dicts aren't
+  ▎ thread-safe for concurrent writes. The code wraps all writes in a single threading.Lock via _store_update(), which serializes access — only one thread can write at a time, others block and wait.
+  ▎ Reads are unprotected because Python's GIL makes single-key dict reads safe. The known limitation is that this only works for a single process. At production scale you'd replace the dict with
+  ▎ Redis, which gives you atomic operations and works across multiple instances."
+
+
+### REDIS
+
+What Redis is — starting from what you know
+
+  You know SQLite. Let me map everything to that.
+
+  SQLite:
+  - Data lives on disk (a .db file)
+  - Organized as tables with rows and columns
+  - You query with SQL (SELECT * FROM pipelines WHERE id = ?)
+  - Reading takes microseconds (disk seek)
+  - Built for: permanent data that survives restarts
+
+  Redis:
+  - Data lives in RAM (memory)
+  - Organized as key → value pairs (like a Python dict)
+  - You query with commands (GET pipeline:SKU00090, SET pipeline:SKU00090 "...")
+  - Reading takes nanoseconds (10-100x faster than SQLite)
+  - Built for: temporary shared state that needs to be fast
+
+  The simplest mental model: Redis is a Python dict that lives outside your process, on a server, accessible by every instance of your app.
+
+  SQLite  →  "permanent notebook on disk"
+  Redis   →  "shared whiteboard in the room, everyone can read/write it"
+
+  ---
+  Why Redis solves the problem threading.Lock cannot
+
+  Current architecture — one process:
+
+  FastAPI Process
+  ├── Thread 1 (requests)    ─┐
+  ├── Thread 2 (pipeline A)   ├──► _pipeline_store (dict in RAM)
+  └── Thread 3 (pipeline B)  ─┘
+           ↑
+     Lock protects this. Works fine.
+
+  Production architecture — three processes (three servers):
+
+  FastAPI Instance 1    FastAPI Instance 2    FastAPI Instance 3
+  └── _pipeline_store   └── _pipeline_store   └── _pipeline_store
+      (its own copy)        (its own copy)        (its own copy)
+
+  User starts pipeline on Instance 1. Dashboard polls Instance 2. Instance 2 has no idea that pipeline exists. The lock cannot help here — the lock only protects one dict inside one process.
+
+  With Redis:
+
+  FastAPI Instance 1 ─┐
+  FastAPI Instance 2 ─┼──► Redis Server ──► one shared store, all instances see it
+  FastAPI Instance 3 ─┘
+
+  ---
+  Blueprint for this codebase — what changes
+
+  Only one file changes: api/main.py. Graph.py, crew.py, everything else stays identical.
+
+  Step 1 — Replace the dict and lock with a Redis connection
+
+  # BEFORE (api/main.py:121–122)
+  _pipeline_store: dict[str, dict] = {}
+  _store_lock = threading.Lock()
+
+  # AFTER
+  import redis, json
+  _redis = redis.Redis(host="localhost", port=6379, decode_responses=True)
+  # threading.Lock → gone. Redis handles atomicity itself.
+
+  Step 2 — Replace _store_update()
+
+  # BEFORE
+  def _store_update(pipeline_id: str, **kwargs):
+      with _store_lock:
+          if pipeline_id not in _pipeline_store:
+              _pipeline_store[pipeline_id] = {}
+          _pipeline_store[pipeline_id].update(kwargs)
+          _pipeline_store[pipeline_id]["last_updated"] = _now()
+
+  # AFTER
+  def _store_update(pipeline_id: str, **kwargs):
+      key = f"pipeline:{pipeline_id}"          # Redis key convention: "type:id"
+      existing = _redis.get(key)               # GET → returns JSON string or None
+      current  = json.loads(existing) if existing else {}
+      current.update(kwargs)
+      current["last_updated"] = _now()
+      _redis.set(key, json.dumps(current))     # SET → stores JSON string
+      _redis.expire(key, 86400)                # auto-delete after 24h (optional cleanup)
+
+  Step 3 — Replace reads
+
+  # BEFORE (scattered in route handlers)
+  store_entry = _pipeline_store.get(pipeline_id)
+
+  # AFTER
+  raw = _redis.get(f"pipeline:{pipeline_id}")
+  store_entry = json.loads(raw) if raw else None
+
+  Step 4 — Replace the list endpoint
+
+  # BEFORE
+  for pid, entry in _pipeline_store.items():  ...
+
+  # AFTER
+  keys = _redis.keys("pipeline:*")            # find all keys matching pattern
+  for key in keys:
+      raw   = _redis.get(key)
+      entry = json.loads(raw) if raw else {}
+      pid   = key.replace("pipeline:", "")
+      ...
+
+  That's the entire migration. Four small changes. No other file touches _pipeline_store directly.
+
+  ---
+  What Redis commands you need to learn — just 5
+
+  ┌────────────────────┬─────────────────────────────┬─────────────────────────────────┐
+  │      Command       │        What it does         │           Python call           │
+  ├────────────────────┼─────────────────────────────┼─────────────────────────────────┤
+  │ SET key value      │ Store a string              │ r.set("pipeline:ABC", "{...}")  │
+  ├────────────────────┼─────────────────────────────┼─────────────────────────────────┤
+  │ GET key            │ Read a string               │ r.get("pipeline:ABC")           │
+  ├────────────────────┼─────────────────────────────┼─────────────────────────────────┤
+  │ KEYS pattern       │ Find all matching keys      │ r.keys("pipeline:*")            │
+  ├────────────────────┼─────────────────────────────┼─────────────────────────────────┤
+  │ EXPIRE key seconds │ Auto-delete after N seconds │ r.expire("pipeline:ABC", 86400) │
+  ├────────────────────┼─────────────────────────────┼─────────────────────────────────┤
+  │ DEL key            │ Delete a key                │ r.delete("pipeline:ABC")        │
+  └────────────────────┴─────────────────────────────┴─────────────────────────────────┘
+
+  That's it. For this use case you never need SQL, joins, transactions, or schemas.
+
+  ---
+  Why no lock is needed with Redis
+
+  Redis is single-threaded internally. Every command runs one at a time, in order, atomically. When Instance 1 does SET pipeline:ABC "...", no other instance can read a half-written value — Redis
+  finishes the SET completely before processing the next command.
+
+  SQLite with threading.Lock:  YOU manage the lock in Python code
+  Redis:                        Redis manages atomicity internally — you just call SET/GET
+
+  ---
+  Learning curve — honestly
+
+  ┌───────────────────────────────┬────────────────────────────────────────────────────────────────┐
+  │       You already know        │                        Maps to Redis as                        │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────────┤
+  │ db["key"] = value             │ r.set("key", value)                                            │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────────┤
+  │ db.get("key")                 │ r.get("key")                                                   │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────────┤
+  │ SQLite WHERE id = ?           │ Redis key naming convention: "pipeline:PIPE_SKU001_2026-06-05" │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────────┤
+  │ SQLite stores any type        │ Redis stores strings only → you JSON-serialize everything      │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────────┤
+  │ SQLite file survives restarts │ Redis has optional persistence (RDB snapshots or AOF log)      │
+  └───────────────────────────────┴────────────────────────────────────────────────────────────────┘
+
+  The one gotcha: Redis only stores strings. So you serialize your Python dict to JSON before writing, and deserialize after reading. That's the json.dumps() / json.loads() you see in the blueprint
+  above.
+
+  Time to be productive: 2–3 hours. Install Redis locally (winget install Redis.Redis on Windows), run redis-server, pip install redis, and you can replace this codebase's store in an afternoon.
+
+  The one question Google will ask:
+
+  ▎ "Redis is in-memory. What happens to your pipeline state if Redis restarts?"
+
+  ▎ Answer: "Redis has two persistence modes. RDB takes a snapshot every N seconds — you lose up to N seconds of data on crash. AOF logs every write command — near-zero data loss. For pipeline state
+  ▎ that takes 90 seconds to compute, I'd enable AOF. In practice for this use case — pipelines are idempotent by pipeline_id (PIPE_SKU00090_2026-06-05), so a crash just means the user re-triggers the
+  ▎ pipeline and it reruns."
+
+
+  he simple mental map
+
+  ┌─────────────────────┬────────────────────────────────┬───────────────────────────────────────┐
+  │      Use case       │         What's stored          │              Why not SQL              │
+  ├─────────────────────┼────────────────────────────────┼───────────────────────────────────────┤
+  │ Sessions            │ Login state per user           │ Too many reads per second             │
+  ├─────────────────────┼────────────────────────────────┼───────────────────────────────────────┤
+  │ Rate limits         │ Request counters               │ Need auto-expiry + atomic increment   │
+  ├─────────────────────┼────────────────────────────────┼───────────────────────────────────────┤
+  │ Cache               │ DB query results               │ Speed — microseconds vs milliseconds  │
+  ├─────────────────────┼────────────────────────────────┼───────────────────────────────────────┤
+  │ Real-time state     │ Driver location, typing status │ Changes every second, temporary       │
+  ├─────────────────────┼────────────────────────────────┼───────────────────────────────────────┤
+  │ Job queues          │ "Work to be done" list         │ Workers need to claim jobs atomically │
+  ├─────────────────────┼────────────────────────────────┼───────────────────────────────────────┤
+  │ Your pipeline store │ Status of running pipelines    │ Fast reads from dashboard polling     │
+  └─────────────────────┴────────────────────────────────┴───────────────────────────────────────┘
+
+  The one-sentence rule:
+
+  ▎ Use Redis when data is temporary, frequently accessed, or needs to be shared across multiple servers — and speed matters more than permanent storage.
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---
 ## Q12 — What happens to a paused pipeline if the API server restarts?
 
 ### The Question to Ask

@@ -1,8 +1,8 @@
 # ORCA — 17 Agent Engineering Interview Questions
 
-> **Focus area.** Deep questions on multi-agent orchestration: LangGraph state machines,
+> **Focus area** Deep questions on multi-agent orchestration: LangGraph state machines,
 > CrewAI crew collaboration, MCP tool discovery, and the async/sync bridge. These
-> are the questions a Google interviewer reaches for when evaluating senior AI engineers.
+> are the questions a Google interviewer reaches for when evaluating senior AI engineer
 
 ---
 

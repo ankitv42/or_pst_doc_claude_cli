@@ -50,10 +50,16 @@ streamlit run dashboard/app.py
 docker-compose up --build
 ```
 
+**Unit tests (no API key or LLM needed):**
+```bash
+python -m pytest tests/ -v    # scoring formula + routing logic
+```
+
 **Evaluations:**
 ```bash
 python evals/run_retrieval_eval.py          # Layer 1 retrieval eval — no API key needed
 python evals/run_retrieval_eval.py --ci     # CI gate mode (fails if pass rate < 70%)
+python evals/eval_main.py --ci              # Full suite: retrieval + RAGAS + judge + composite (≥0.75)
 python evals/run_judge_eval.py              # Layer 2 LLM-as-judge (under development)
 ```
 
@@ -63,8 +69,6 @@ python agents/graph.py      # runs pipeline on top DB alert
 python agents/tools.py      # tests all 6 MCP tools via LangChain @tool
 python mcp_server/server.py # verifies MCP server starts and lists tools
 ```
-
-There are no pytest unit tests — evals are the primary correctness mechanism.
 
 ## Architecture
 
@@ -91,7 +95,7 @@ Streamlit Dashboard ──HTTP──► FastAPI Backend ──► LangGraph 4-Ag
 | Agent 3 — Capital Allocation | Scores options, decides if approval is needed | Exact formula: `budget_score + availability_score + margin_score + lead_time_penalty` |
 | Agent 4 / Route Node | Pure Python routing | `ESCALATE` (cost > limit) → `AUTO_EXECUTE` (cost < limit) → `SUSPEND` (pool HIGH) |
 
-Key files: `agents/graph.py` (LangGraph state machine), `agents/prompts.py` (4 system prompts), `agents/crew.py` (CrewAI sub-crew), `agents/tools.py` (tool definitions), `agents/llm_factory.py`, `api/models.py` (all Pydantic request/response models).
+Key files: `agents/graph.py` (LangGraph state machine), `agents/prompts.py` (4 system prompts), `agents/crew.py` (CrewAI sub-crew — uses `llama-3.3-70b-versatile`, not the default 8b model), `agents/tools.py` (tool definitions), `agents/llm_factory.py`, `api/models.py` (all Pydantic request/response models).
 
 ### `_run_async` bridge
 
@@ -131,15 +135,19 @@ SQLite database at `db/orca.db`. All reads/writes go through `db/queries.py` (cl
 3 layers:
 - **Layer 1** (`run_retrieval_eval.py`): 11 golden test cases in `evals/golden_dataset.py` checking `query_for_agent*()` returns correct keywords and doesn't leak wrong-doc content. Target ≥70% pass rate, zero leaks.
 - **Layer 2** (`run_judge_eval.py`): LLM-as-judge for agent decisions — RAG grounding, HITL accuracy, formula correctness, Class-A safety. **Under development.**
-- **Layer 3** (`.github/workflows/eval_gate.yaml`): CI gate runs Layer 1 on every push to main.
+- **Layer 3** (`.github/workflows/eval_gate.yaml`): CI gate on every push to main — runs `pytest tests/` first (scoring + routing, no LLM), then `evals/eval_main.py` (full suite via `composite_score.py`, target composite ≥0.75).
 
 ## Known Issues
 
 1. **CrewAI + Groq `cache_breakpoint` error** (HIGH): CrewAI injects `cache_breakpoint` into the system message; Groq rejects it. Agent 1's CrewAI sub-crew fails every run and falls back to a raw-data demand summary.
-2. **No pytest unit tests** (HIGH): `agents/tools.py`, API endpoints, and `db/queries.py` have no unit test coverage.
+2. **Partial pytest coverage** (HIGH): `agents/tools.py`, API endpoints, and `db/queries.py` have no unit test coverage. `tests/test_scoring.py` and `tests/test_routing.py` cover the scoring formula and routing logic only.
 3. **Layer 2 LLM-as-judge not built** (HIGH): `evals/run_judge_eval.py` is a stub.
 4. **Layer 1 keyword calibration** (MEDIUM): Golden dataset keywords were written from memory and may not match exact wording in policy docs.
 5. **Hardcoded Windows path** (LOW): `sys.path.append(r"C:/lit")` appears in `agents/graph.py`, `api/main.py`, and `evals/run_retrieval_eval.py` as a litellm workaround. This path does not exist on non-Windows machines and should be made conditional.
+
+## Architecture Decision Records (`docs/adr/`)
+
+5 ADRs document key design choices: LangGraph for stateful interruptible workflows (ADR-001), MCP for dynamic tool discovery (ADR-002), native RAGAS metrics implementation (ADR-003), ChromaDB index committed to repo for reproducible CI (ADR-004), and pure-Python HITL routing by cost threshold (ADR-005).
 
 ## Deployment
 
